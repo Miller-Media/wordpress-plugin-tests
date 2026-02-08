@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<phpunit
+	bootstrap="bootstrap.php"
+	backupGlobals="false"
+	colors="true"
+	convertErrorsToExceptions="true"
+	convertNoticesToExceptions="true"
+	convertWarningsToExceptions="true"
+	beStrictAboutTestsThatDoNotTestAnything="true"
+>
+	<testsuites>
+		<testsuite name="Unit Tests">
+			<directory suffix="Test.php">./unit/</directory>
+		</testsuite>
+		<testsuite name="Integration Tests">
+			<directory suffix="Test.php">./integration/</directory>
+		</testsuite>
+	</testsuites>
+
+	<php>
+		<env name="WP_TESTS_DB_HOST" value="db-test" />
+		<env name="WP_TESTS_DB_NAME" value="wordpress_test" />
+		<env name="WP_TESTS_DB_USER" value="wordpress" />
+		<env name="WP_TESTS_DB_PASS" value="wordpress" />
+	</php>
+</phpunit>

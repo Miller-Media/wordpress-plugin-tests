@@ -1,0 +1,8 @@
+[
+  {
+    "email": "test@example.com",
+    "status": "sent",
+    "_id": "fake_mandrill_msg_id_001",
+    "reject_reason": null
+  }
+]

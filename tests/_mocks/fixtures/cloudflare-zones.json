@@ -1,0 +1,26 @@
+{
+  "success": true,
+  "errors": [],
+  "messages": [],
+  "result": [
+    {
+      "id": "fake_zone_id_123",
+      "name": "example.org",
+      "status": "active",
+      "paused": false,
+      "type": "full",
+      "development_mode": 0,
+      "name_servers": [
+        "ns1.cloudflare.com",
+        "ns2.cloudflare.com"
+      ]
+    }
+  ],
+  "result_info": {
+    "page": 1,
+    "per_page": 20,
+    "total_pages": 1,
+    "count": 1,
+    "total_count": 1
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "success": true,
+  "errors": [],
+  "messages": [],
+  "result": {
+    "id": "fake_rule_id_456",
+    "notes": "Blocked for attempting to login using a banned username.",
+    "allowed_modes": ["whitelist", "block", "challenge", "js_challenge"],
+    "mode": "block",
+    "configuration": {
+      "target": "ip",
+      "value": "198.51.100.1"
+    },
+    "scope": {
+      "id": "fake_zone_id_123",
+      "name": "example.org",
+      "type": "zone"
+    },
+    "created_on": "2024-01-01T00:00:00Z",
+    "modified_on": "2024-01-01T00:00:00Z"
+  }
+}

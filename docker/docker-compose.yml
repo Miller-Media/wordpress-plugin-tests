@@ -1,0 +1,71 @@
+services:
+  wordpress:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:80"
+    environment:
+      WORDPRESS_DB_HOST: db
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: wordpress
+      WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_DEBUG: 1
+    volumes:
+      # Mount plugins into wp-content/plugins
+      - ../cloudflare-ip-blacklist:/var/www/html/wp-content/plugins/ip-blacklist-for-cloudflare
+      - ../edit-usernames:/var/www/html/wp-content/plugins/edit-usernames
+      - ../expire-passwords:/var/www/html/wp-content/plugins/expire-user-passwords
+      - ../protect-the-children:/var/www/html/wp-content/plugins/protect-the-children
+      - ../send-emails-with-mandrill:/var/www/html/wp-content/plugins/send-emails-with-mandrill
+      - ../wooflare:/var/www/html/wp-content/plugins/wooflare
+      # Mount tests directory
+      - ../tests:/var/www/tests
+      # Mount phpcs config
+      - ../phpcs.xml:/var/www/phpcs.xml
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - wp-test
+
+  db:
+    image: mysql:8.0
+    environment:
+      MYSQL_DATABASE: wordpress
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD: wordpress
+      MYSQL_ROOT_PASSWORD: root
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - wp-test
+
+  # Separate database for tests so they don't interfere with the dev site
+  db-test:
+    image: mysql:8.0
+    environment:
+      MYSQL_DATABASE: wordpress_test
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD: wordpress
+      MYSQL_ROOT_PASSWORD: root
+    tmpfs:
+      - /var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - wp-test
+
+volumes:
+  db_data:
+
+networks:
+  wp-test:

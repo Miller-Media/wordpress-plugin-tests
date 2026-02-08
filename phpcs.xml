@@ -1,0 +1,65 @@
+<?xml version="1.0"?>
+<ruleset name="WordPress Plugin Standards">
+	<description>WordPress Coding Standards + PHP 8.1 compatibility for all plugins.</description>
+
+	<!-- File paths are passed via command line (paths differ between host and container) -->
+
+	<!-- Exclude non-PHP assets and build artifacts -->
+	<exclude-pattern>*/node_modules/*</exclude-pattern>
+	<exclude-pattern>*/vendor/*</exclude-pattern>
+	<exclude-pattern>*/build/*</exclude-pattern>
+	<exclude-pattern>*/assets/*</exclude-pattern>
+	<exclude-pattern>*.js</exclude-pattern>
+	<exclude-pattern>*.css</exclude-pattern>
+	<exclude-pattern>*.min.php</exclude-pattern>
+
+	<!-- Show colors and progress -->
+	<arg name="colors"/>
+	<arg value="sp"/>
+	<arg name="extensions" value="php"/>
+
+	<!-- WordPress Coding Standards -->
+	<rule ref="WordPress">
+		<!-- Allow short array syntax -->
+		<exclude name="Generic.Arrays.DisallowShortArraySyntax"/>
+		<!-- Don't require file comment headers in every file -->
+		<exclude name="Squiz.Commenting.FileComment"/>
+		<!-- Allow CamelCase method names (used heavily in these plugins) -->
+		<exclude name="WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid"/>
+		<!-- Allow CamelCase variable names -->
+		<exclude name="WordPress.NamingConventions.ValidVariableName.VariableNotSnakeCase"/>
+		<exclude name="WordPress.NamingConventions.ValidVariableName.PropertyNotSnakeCase"/>
+		<exclude name="WordPress.NamingConventions.ValidVariableName.UsedPropertyNotSnakeCase"/>
+	</rule>
+
+	<!-- PHP 8.1 Compatibility -->
+	<rule ref="PHPCompatibilityWP"/>
+	<config name="testVersion" value="8.1-"/>
+
+	<!-- Minimum WP version for deprecated function checks -->
+	<config name="minimum_supported_wp_version" value="6.0"/>
+
+	<!-- Text domains for i18n checks -->
+	<rule ref="WordPress.WP.I18n">
+		<properties>
+			<property name="text_domain" type="array">
+				<element value="cloudflare-ip-blacklist"/>
+				<element value="edit-usernames"/>
+				<element value="expire-user-passwords"/>
+				<element value="protect-the-children"/>
+				<element value="wpmandrill"/>
+				<element value="send-emails-with-mandrill"/>
+				<element value="wooflare"/>
+			</property>
+		</properties>
+	</rule>
+
+	<!-- Allow the use of $ in $_POST, $_GET, $_SERVER etc. -->
+	<rule ref="WordPress.Security.ValidatedSanitizedInput">
+		<properties>
+			<property name="customSanitizingFunctions" type="array">
+				<element value="sanitize_text_field"/>
+			</property>
+		</properties>
+	</rule>
+</ruleset>

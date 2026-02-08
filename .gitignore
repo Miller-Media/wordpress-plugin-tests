@@ -1,0 +1,42 @@
+# Dependencies
+vendor/
+node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker volumes
+docker/db_data/
+
+# Test artifacts
+/tmp/wordpress-tests-lib/
+tests/.env
+tests/wp-tests-config.php
+
+# PHPCS cache
+.phpcs-cache
+
+# PHPUnit cache
+tests/.phpunit.result.cache
+
+# Composer
+composer.lock
+
+# Plugin directories (each is its own git repo)
+/cloudflare-ip-blacklist/
+/edit-usernames/
+/expire-passwords/
+/protect-the-children/
+/send-emails-with-mandrill/
+/wooflare/
+
+# Build artifacts
+*.log
