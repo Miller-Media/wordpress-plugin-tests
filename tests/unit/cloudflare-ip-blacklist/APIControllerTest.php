@@ -105,4 +105,33 @@ class CFIP_APIControllerTest extends PluginTestCase {
 		$this->assertEquals( 'test@example.com', $this->api->getSetting( 'cf_email' ) );
 		$this->assertEquals( 'fake_api_key_123', $this->api->getSetting( 'cf_key' ) );
 	}
+
+	public function test_request_uses_bearer_token_when_api_token_auth() {
+		update_option( 'cfip_settings', array(
+			'cf_auth_type' => 'api_token',
+			'cf_token'     => 'fake_bearer_token_123',
+			'zone_id'      => 'fake_zone_id_123',
+		) );
+		$api = new CFIP_CloudflareAPIController();
+
+		$api->request( 'GET', $api->url . 'zones' );
+
+		$log = CloudflareAPIMock::get_last_request();
+		$this->assertNotNull( $log );
+		$this->assertEquals( 'Bearer fake_bearer_token_123', $log['headers']['Authorization'] );
+		$this->assertArrayNotHasKey( 'X-Auth-Email', $log['headers'] );
+		$this->assertArrayNotHasKey( 'X-Auth-Key', $log['headers'] );
+	}
+
+	public function test_request_returns_false_without_token_when_api_token_auth() {
+		update_option( 'cfip_settings', array(
+			'cf_auth_type' => 'api_token',
+			'cf_token'     => '',
+			'zone_id'      => 'fake_zone_id_123',
+		) );
+		$api = new CFIP_CloudflareAPIController();
+
+		$result = $api->request( 'GET', $api->url . 'zones' );
+		$this->assertFalse( $result );
+	}
 }

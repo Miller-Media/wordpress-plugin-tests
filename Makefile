@@ -12,6 +12,7 @@
 #   make lint           - Run PHPCS on all plugins
 #   make lint-fix       - Auto-fix PHPCS issues
 #   make lint-plugin PLUGIN=name - Lint a single plugin
+#   make pot            - Regenerate .pot translation templates
 #   make shell          - Open shell in WordPress container
 #   make mysql-shell    - Open MySQL shell
 
@@ -20,7 +21,7 @@ CONTAINER = $(DOCKER_COMPOSE) exec -T wordpress
 PLUGIN ?=
 
 .PHONY: start stop clean restart test test-unit test-integration test-plugin \
-        lint lint-fix lint-plugin shell mysql-shell setup-tests logs
+        lint lint-fix lint-plugin pot shell mysql-shell setup-tests logs
 
 # ── Docker Lifecycle ──────────────────────────────────────────
 
@@ -94,6 +95,17 @@ ifndef PLUGIN
 	@exit 1
 endif
 	$(CONTAINER) phpcs --standard=/var/www/phpcs.xml /var/www/html/wp-content/plugins/$(PLUGIN)/
+
+# ── i18n ─────────────────────────────────────────────────────
+
+pot:
+	$(CONTAINER) wp --allow-root i18n make-pot /var/www/html/wp-content/plugins/ip-blacklist-for-cloudflare/ /var/www/html/wp-content/plugins/ip-blacklist-for-cloudflare/languages/ip-blacklist-cloudflare.pot --domain=ip-blacklist-cloudflare
+	$(CONTAINER) wp --allow-root i18n make-pot /var/www/html/wp-content/plugins/edit-usernames/ /var/www/html/wp-content/plugins/edit-usernames/languages/edit-usernames.pot --domain=edit-usernames
+	$(CONTAINER) wp --allow-root i18n make-pot /var/www/html/wp-content/plugins/expire-user-passwords/ /var/www/html/wp-content/plugins/expire-user-passwords/languages/expire-user-passwords.pot --domain=expire-user-passwords
+	$(CONTAINER) wp --allow-root i18n make-pot /var/www/html/wp-content/plugins/protect-the-children/ /var/www/html/wp-content/plugins/protect-the-children/languages/protect-the-children.pot --domain=protect-the-children
+	$(CONTAINER) wp --allow-root i18n make-pot /var/www/html/wp-content/plugins/send-emails-with-mandrill/ /var/www/html/wp-content/plugins/send-emails-with-mandrill/languages/send-emails-with-mandrill.pot --domain=send-emails-with-mandrill
+	$(CONTAINER) wp --allow-root i18n make-pot /var/www/html/wp-content/plugins/wooflare/ /var/www/html/wp-content/plugins/wooflare/languages/wooflare.pot --domain=wooflare
+	@echo "All .pot files regenerated."
 
 # ── Shell Access ──────────────────────────────────────────────
 
