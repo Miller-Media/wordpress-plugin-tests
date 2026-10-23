@@ -1,12 +1,18 @@
 # Copy into a plugin repo as .github/workflows/ci.yml, replacing <slug>
 # with that plugin's manifest slug from Miller-Media/wordpress-plugin-tests
-# plugins.json (e.g. "cloudflare-ip-blacklist").
+# plugins.json (e.g. "cloudflare-ip-blacklist"), and `main` below with this
+# repo's actual default branch if it differs.
+#
+# The required check this produces in branch protection is "ci / ci-result"
+# (the "ci" prefix is this file's own job id, below) — see CLAUDE.md's
+# "Required check to configure" section in the harness repo.
 name: CI
 
 on:
   pull_request:
   push:
     branches: [master, main]
+  workflow_dispatch:
 
 permissions:
   contents: read

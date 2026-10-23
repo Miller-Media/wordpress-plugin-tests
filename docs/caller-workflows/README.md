@@ -21,10 +21,14 @@ manifest slug from `plugins.json` in this repo):
   harness repo (`Miller-Media/wordpress-plugin-tests`) with required
   reviewers — that's what gates the actual SVN deploy in `release.yml`'s
   `deploy` job.
-- **Branch protection**: require the **`ci-result`** check (and nothing
-  else) on the plugin repo's default branch. That one job fails if any of
-  `changes`/`matrix`/`test` failed, and passes through allow-failure
-  (trunk) legs correctly.
+- **Branch protection**: require the **`ci / ci-result`** check (and
+  nothing else) on the plugin repo's default branch — the `ci /` prefix is
+  the caller job id in `docs/caller-workflows/ci.yml`. That one job fails
+  if any of `changes`/`matrix`/`test`/`plugin_check_matrix`/`plugin-check`
+  failed, and passes through allow-failure (trunk, and plugin-check on the
+  `wporg:false` plugin) legs correctly. In the harness repo's own direct
+  runs (not through a caller), the equivalent check is plain **`ci-result`**
+  (no prefix, since there's no wrapping caller job).
 
 ## ⚠️ Private harness, public plugin repos
 

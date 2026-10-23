@@ -177,6 +177,12 @@ function version_max( $a, $b ) {
 	return version_compare( $a, $b, '>=' ) ? $a : $b;
 }
 
+/**
+ * The fixed PHP sweep every plugin's "wp=latest" leg runs across, newest
+ * version first isn't required — order just has to be deterministic.
+ */
+const CI_PHP_VERSIONS = array( '8.1', '8.2', '8.3', '8.4', '8.5' );
+
 function build_matrix( $manifest, $slugs ) {
 	$defaults = $manifest['defaults'];
 	$rows     = array();
@@ -186,26 +192,45 @@ function build_matrix( $manifest, $slugs ) {
 			continue;
 		}
 
-		$php_versions = array_values( array_unique( array_filter( array(
-			$plugin['requires_php'],
-			$defaults['php_latest'],
-		) ) ) );
+		$php_floor = $plugin['requires_php'] ?: CI_PHP_VERSIONS[0];
 
-		$wp_floor    = version_max( $plugin['requires_wp'], $defaults['wp_ci_floor'] );
-		$wp_versions = array( $wp_floor, 'latest' );
+		$php_versions = array_values( array_filter( CI_PHP_VERSIONS, function ( $php ) use ( $php_floor ) {
+			return version_compare( $php, $php_floor, '>=' );
+		} ) );
+
+		// A plugin whose real floor sits below our fixed sweep (e.g.
+		// one-off-emails-for-woocommerce's PHP 7.4) gets one extra, cheap
+		// leg at that exact floor rather than silently never testing it.
+		if ( version_compare( $php_floor, CI_PHP_VERSIONS[0], '<' ) ) {
+			array_unshift( $php_versions, $php_floor );
+		}
 
 		$needs_wc = in_array( 'woocommerce', $plugin['dependencies'], true );
 
 		foreach ( $php_versions as $php ) {
-			foreach ( $wp_versions as $wp ) {
-				$rows[] = array(
-					'slug'    => $plugin['slug'],
-					'php'     => $php,
-					'wp'      => $wp,
-					'wc'      => $needs_wc ? $defaults['wc_latest_tested'] : null,
-					'with_wc' => false,
-				);
-			}
+			$rows[] = array(
+				'slug'    => $plugin['slug'],
+				'php'     => $php,
+				'wp'      => 'latest',
+				'wc'      => $needs_wc ? $defaults['wc_latest_tested'] : null,
+				'with_wc' => false,
+			);
+		}
+
+		// Only plugins that declare a real requires_wp above the harness's
+		// baseline floor get a dedicated WP-floor leg — none currently do
+		// (every manifest requires_wp sits below wp_ci_floor), so this is
+		// a no-op today but keeps a future higher-floor plugin honest
+		// without reintroducing a blanket floor leg for everyone.
+		$wp_floor = version_max( $plugin['requires_wp'], $defaults['wp_ci_floor'] );
+		if ( null !== $plugin['requires_wp'] && version_compare( $wp_floor, $defaults['wp_ci_floor'], '>' ) ) {
+			$rows[] = array(
+				'slug'    => $plugin['slug'],
+				'php'     => $defaults['php_latest'],
+				'wp'      => $wp_floor,
+				'wc'      => $needs_wc ? $defaults['wc_latest_tested'] : null,
+				'with_wc' => false,
+			);
 		}
 
 		// A plugin that doesn't require WooCommerce can still opt into one

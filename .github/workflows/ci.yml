@@ -208,7 +208,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ matrix.repo }}
-          ssh-key: ${{ secrets.HARNESS_DEPLOY_KEY }}
           path: harness/${{ matrix.dir }}
 
       - name: Set up PHP ${{ matrix.php }}
@@ -282,6 +281,93 @@ jobs:
       - name: Check version consistency
         working-directory: harness
         run: php bin/check-versions.php ${{ matrix.slug }}
+
+  # ── One row per affected plugin (deduped — unlike the php/wp test ──
+  # matrix above) carrying just what plugin-check needs: dir, repo,
+  # install_dir, wporg.
+  plugin_check_matrix:
+    name: CI / plugin-check matrix
+    needs: changes
+    if: ${{ github.event_name != 'schedule' && needs.changes.outputs.plugins != '[]' }}
+    runs-on: ubuntu-latest
+    outputs:
+      include: ${{ steps.build.outputs.include }}
+    steps:
+      - name: Checkout harness (direct trigger)
+        if: ${{ inputs.plugin == '' }}
+        uses: actions/checkout@v4
+
+      - name: Checkout harness (reusable call)
+        if: ${{ inputs.plugin != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: Miller-Media/wordpress-plugin-tests
+          ref: ${{ inputs.harness_ref }}
+          ssh-key: ${{ secrets.HARNESS_DEPLOY_KEY }}
+
+      - name: Build plugin-check matrix
+        id: build
+        run: |
+          set -euo pipefail
+
+          PLUGINS='${{ needs.changes.outputs.plugins }}'
+
+          MATRIX=$(php -r '
+            $slugs    = json_decode($argv[1], true);
+            $manifest = json_decode(file_get_contents("plugins.json"), true);
+            $by_slug  = array();
+            foreach ($manifest["plugins"] as $p) { $by_slug[$p["slug"]] = $p; }
+            $rows = array();
+            foreach ($slugs as $slug) {
+              $p = $by_slug[$slug];
+              $rows[] = array(
+                "slug"        => $p["slug"],
+                "dir"         => $p["dir"],
+                "repo"        => $p["repo"],
+                "install_dir" => $p["install_dir"],
+                "wporg"       => $p["wporg"],
+              );
+            }
+            echo json_encode($rows);
+          ' "$PLUGINS")
+          echo "Plugin-check matrix: $MATRIX"
+          echo "include=$MATRIX" >> "$GITHUB_OUTPUT"
+
+  # ── WordPress.org plugin-check — errors block, warnings never do ──
+  # (ignore-warnings: true). Non-blocking (continue-on-error) for the one
+  # manifest plugin with wporg:false (miller-media-csv-importer), since
+  # that plugin is never deployed to SVN and plugin-check's wp.org-centric
+  # rules aren't a meaningful gate for it.
+  plugin-check:
+    name: "CI / plugin-check (${{ matrix.slug }})"
+    needs: plugin_check_matrix
+    if: ${{ github.event_name != 'schedule' && needs.plugin_check_matrix.outputs.include != '[]' }}
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.wporg == false }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plugin_check_matrix.outputs.include) }}
+    steps:
+      - name: Checkout plugin under test (caller's own repo)
+        if: ${{ matrix.slug == inputs.plugin }}
+        uses: actions/checkout@v4
+        with:
+          path: plugin
+
+      - name: Checkout plugin under test (cross-repo)
+        if: ${{ matrix.slug != inputs.plugin }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.repo }}
+          path: plugin
+
+      - name: WordPress Plugin Check
+        uses: wordpress/plugin-check-action@v1
+        with:
+          build-dir: './plugin'
+          exclude-directories: '.github,tests,node_modules,vendor'
+          ignore-warnings: true
 
   # ── Nightly / beta-RC compatibility (non-blocking) ───────────────
   #
@@ -387,7 +473,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ matrix.repo }}
-          ssh-key: ${{ secrets.HARNESS_DEPLOY_KEY }}
           path: harness/${{ matrix.dir }}
 
       - name: Set up PHP ${{ matrix.php }}
@@ -431,17 +516,21 @@ jobs:
         run: make test-plugin-native PLUGIN=${{ matrix.slug }}
 
   # ── Single required check: configure branch protection on this ──
+  # (plugin-check's own job-level continue-on-error already makes its
+  # result read as "success" for wporg:false plugins — see that job.)
   ci-result:
     name: ci-result
     if: always()
-    needs: [changes, matrix, test]
+    needs: [changes, matrix, test, plugin_check_matrix, plugin-check]
     runs-on: ubuntu-latest
     steps:
       - name: Evaluate required jobs
         run: |
-          echo "changes: ${{ needs.changes.result }}"
-          echo "matrix:  ${{ needs.matrix.result }}"
-          echo "test:    ${{ needs.test.result }}"
+          echo "changes:             ${{ needs.changes.result }}"
+          echo "matrix:              ${{ needs.matrix.result }}"
+          echo "test:                ${{ needs.test.result }}"
+          echo "plugin_check_matrix: ${{ needs.plugin_check_matrix.result }}"
+          echo "plugin-check:        ${{ needs['plugin-check'].result }}"
 
           if [ "${{ needs.changes.result }}" != "success" ]; then
             echo "::error::changes job did not succeed"
@@ -453,6 +542,14 @@ jobs:
           fi
           if [ "${{ needs.test.result }}" == "failure" ] || [ "${{ needs.test.result }}" == "cancelled" ]; then
             echo "::error::test job failed"
+            exit 1
+          fi
+          if [ "${{ needs.plugin_check_matrix.result }}" != "success" ] && [ "${{ needs.plugin_check_matrix.result }}" != "skipped" ]; then
+            echo "::error::plugin_check_matrix job did not succeed"
+            exit 1
+          fi
+          if [ "${{ needs['plugin-check'].result }}" == "failure" ] || [ "${{ needs['plugin-check'].result }}" == "cancelled" ]; then
+            echo "::error::plugin-check job failed"
             exit 1
           fi
           echo "All required jobs passed (or had nothing to do)."
