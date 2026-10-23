@@ -250,6 +250,7 @@ jobs:
           WP_TESTS_DB_USER: root
           WP_TESTS_DB_PASS: ''
           WP_TESTS_PHPUNIT_POLYFILLS_PATH: ${{ env.COMPOSER_HOME }}/vendor/yoast/phpunit-polyfills
+          MM_TESTS_PLUGIN: ${{ matrix.slug }}
           MM_TESTS_WITH_WC: ${{ matrix.with_wc && '1' || '' }}
         run: make test-plugin-native PLUGIN=${{ matrix.slug }}
 
@@ -425,6 +426,7 @@ jobs:
           WP_TESTS_DB_USER: root
           WP_TESTS_DB_PASS: ''
           WP_TESTS_PHPUNIT_POLYFILLS_PATH: ${{ env.COMPOSER_HOME }}/vendor/yoast/phpunit-polyfills
+          MM_TESTS_PLUGIN: ${{ matrix.slug }}
           MM_TESTS_WITH_WC: ${{ matrix.with_wc && '1' || '' }}
         run: make test-plugin-native PLUGIN=${{ matrix.slug }}
 

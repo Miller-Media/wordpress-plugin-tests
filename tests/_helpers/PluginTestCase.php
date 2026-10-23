@@ -13,6 +13,16 @@ class PluginTestCase extends WP_UnitTestCase {
 	public function setUp(): void {
 		parent::setUp();
 
+		// get_plugin_data() lives in wp-admin/includes/plugin.php, which core
+		// only auto-loads unconditionally as of WP 6.9 (#62244) — on the
+		// harness's older CI legs (e.g. the wp_ci_floor matrix row) it's only
+		// available in wp-admin requests otherwise, so tests that call it
+		// (e.g. reading a plugin's live Version header) need it required
+		// explicitly here rather than assuming it's always defined.
+		if ( ! function_exists( 'get_plugin_data' ) ) {
+			require_once ABSPATH . 'wp-admin/includes/plugin.php';
+		}
+
 		// Reset API mocks before each test
 		CloudflareAPIMock::reset();
 		MandrillAPIMock::reset();

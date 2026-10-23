@@ -121,8 +121,35 @@ setup-tests:
 
 # ── Tests (Docker) ───────────────────────────────────────────
 
+# test (the full suite) runs each plugin's suite in its own `phpunit`
+# invocation, looping over `bin/manifest.php slugs` and aggregating the
+# exit status (every plugin runs even if an earlier one fails) — see
+# "Process isolation" in CLAUDE.md for why: sharing one process across all
+# 9 plugins would let e.g. a WooCommerce class stub defined by one plugin's
+# tests leak into another plugin's class_exists('WooCommerce') check. Each
+# invocation sets MM_TESTS_PLUGIN (read by tests/bootstrap.php to load only
+# that plugin) and MM_TESTS_WITH_WC derived from its manifest dependencies,
+# mirroring the CI matrix — including a second, WC-active invocation for a
+# plugin with a `wc_optional_leg`. test-unit/test-integration intentionally
+# keep the old one-process-for-everything behavior (MM_TESTS_PLUGIN unset).
 test: compose
-	$(CONTAINER) phpunit --configuration /var/www/tests/phpunit.xml
+	@status=0; \
+	for slug in $$(php $(MANIFEST) slugs); do \
+		echo "=== test ($$slug) ==="; \
+		with_wc=$$(php $(MANIFEST) field $$slug dependencies | grep -qx woocommerce && echo 1 || echo ''); \
+		tests_dir=$$(php $(MANIFEST) field $$slug tests_dir); \
+		$(CONTAINER) env MM_TESTS_PLUGIN=$$slug MM_TESTS_WITH_WC=$$with_wc \
+			phpunit --configuration /var/www/tests/phpunit.xml /var/www/tests/unit/$$tests_dir/ \
+			|| status=1; \
+		wc_leg=$$(php $(MANIFEST) field $$slug wc_optional_leg); \
+		if [ -n "$$wc_leg" ]; then \
+			echo "=== test ($$slug, +WC optional leg) ==="; \
+			$(CONTAINER) env MM_TESTS_PLUGIN=$$slug MM_TESTS_WITH_WC=1 \
+				phpunit --configuration /var/www/tests/phpunit.xml /var/www/tests/unit/$$tests_dir/ \
+				|| status=1; \
+		fi; \
+	done; \
+	exit $$status
 
 test-unit: compose
 	$(CONTAINER) phpunit --configuration /var/www/tests/phpunit.xml --testsuite "Unit Tests"
@@ -137,7 +164,9 @@ ifndef PLUGIN
 	@php $(MANIFEST) slugs
 	@exit 1
 endif
-	$(CONTAINER) phpunit --configuration /var/www/tests/phpunit.xml /var/www/tests/unit/$(shell php $(MANIFEST) field $(PLUGIN) tests_dir)/
+	@echo "=== test ($(PLUGIN)) ==="
+	$(CONTAINER) env MM_TESTS_PLUGIN=$(PLUGIN) MM_TESTS_WITH_WC=$${MM_TESTS_WITH_WC:-$(shell php $(MANIFEST) field $(PLUGIN) dependencies | grep -qx woocommerce && echo 1)} \
+		phpunit --configuration /var/www/tests/phpunit.xml /var/www/tests/unit/$(shell php $(MANIFEST) field $(PLUGIN) tests_dir)/
 
 # ── Linting (Docker) ──────────────────────────────────────────
 
@@ -189,8 +218,26 @@ mysql-shell:
 #   export WP_TESTS_DIR=/tmp/wp-native/tests-lib-6.9.1 WP_CORE_DIR=/tmp/wp-native/core-6.9.1
 #   make test-native
 
+# Same per-plugin process isolation as the Docker `test` target above — see
+# the comment there.
 test-native:
-	WP_TESTS_PHPUNIT_POLYFILLS_PATH=$(WP_TESTS_PHPUNIT_POLYFILLS_PATH) $(PHPUNIT_BIN) --configuration tests/phpunit.xml
+	@status=0; \
+	for slug in $$(php $(MANIFEST) slugs); do \
+		echo "=== test-native ($$slug) ==="; \
+		with_wc=$$(php $(MANIFEST) field $$slug dependencies | grep -qx woocommerce && echo 1 || echo ''); \
+		tests_dir=$$(php $(MANIFEST) field $$slug tests_dir); \
+		MM_TESTS_PLUGIN=$$slug MM_TESTS_WITH_WC=$$with_wc \
+			WP_TESTS_PHPUNIT_POLYFILLS_PATH=$(WP_TESTS_PHPUNIT_POLYFILLS_PATH) $(PHPUNIT_BIN) --configuration tests/phpunit.xml tests/unit/$$tests_dir/ \
+			|| status=1; \
+		wc_leg=$$(php $(MANIFEST) field $$slug wc_optional_leg); \
+		if [ -n "$$wc_leg" ]; then \
+			echo "=== test-native ($$slug, +WC optional leg) ==="; \
+			MM_TESTS_PLUGIN=$$slug MM_TESTS_WITH_WC=1 \
+				WP_TESTS_PHPUNIT_POLYFILLS_PATH=$(WP_TESTS_PHPUNIT_POLYFILLS_PATH) $(PHPUNIT_BIN) --configuration tests/phpunit.xml tests/unit/$$tests_dir/ \
+				|| status=1; \
+		fi; \
+	done; \
+	exit $$status
 
 test-plugin-native:
 ifndef PLUGIN
@@ -199,7 +246,9 @@ ifndef PLUGIN
 	@php $(MANIFEST) slugs
 	@exit 1
 endif
-	WP_TESTS_PHPUNIT_POLYFILLS_PATH=$(WP_TESTS_PHPUNIT_POLYFILLS_PATH) $(PHPUNIT_BIN) --configuration tests/phpunit.xml tests/unit/$(shell php $(MANIFEST) field $(PLUGIN) tests_dir)/
+	@echo "=== test-native ($(PLUGIN)) ==="
+	MM_TESTS_PLUGIN=$(PLUGIN) MM_TESTS_WITH_WC=$${MM_TESTS_WITH_WC:-$(shell php $(MANIFEST) field $(PLUGIN) dependencies | grep -qx woocommerce && echo 1)} \
+		WP_TESTS_PHPUNIT_POLYFILLS_PATH=$(WP_TESTS_PHPUNIT_POLYFILLS_PATH) $(PHPUNIT_BIN) --configuration tests/phpunit.xml tests/unit/$(shell php $(MANIFEST) field $(PLUGIN) tests_dir)/
 
 lint-native:
 	@for slug in $$(php $(MANIFEST) slugs); do \

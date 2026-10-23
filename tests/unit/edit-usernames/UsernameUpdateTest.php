@@ -111,7 +111,23 @@ class EUN_UsernameUpdateTest extends PluginTestCase {
 
 	public function tearDown(): void {
 		unset( $_POST['user_login'] );
+		unset( $_POST['_wpnonce'] );
+		unset( $_REQUEST['_wpnonce'] );
 		parent::tearDown();
+	}
+
+	/**
+	 * Simulates the nonce field WordPress core's user-edit.php form already
+	 * prints, so tests exercise update_username() the way a real submission
+	 * would. Must be called after wp_set_current_user() for the acting user,
+	 * since the nonce is tied to the currently logged-in user.
+	 *
+	 * @param int $target_user_id User ID the form is editing.
+	 */
+	private function set_update_user_nonce( $target_user_id ) {
+		$nonce                = wp_create_nonce( 'update-user_' . $target_user_id );
+		$_POST['_wpnonce']    = $nonce;
+		$_REQUEST['_wpnonce'] = $nonce;
 	}
 
 	/**
@@ -124,6 +140,7 @@ class EUN_UsernameUpdateTest extends PluginTestCase {
 		$target = $this->create_test_user( 'subscriber', array( 'user_login' => 'eun_old_login' ) );
 
 		wp_set_current_user( $admin->ID );
+		$this->set_update_user_nonce( $target->ID );
 		$_POST['user_login'] = 'eun_new_login';
 
 		( new EUN_EditUsernames() )->update_username( $target->ID );
@@ -143,6 +160,7 @@ class EUN_UsernameUpdateTest extends PluginTestCase {
 		$target     = $this->create_test_user( 'subscriber', array( 'user_login' => 'eun_untouched_login' ) );
 
 		wp_set_current_user( $subscriber->ID );
+		$this->set_update_user_nonce( $target->ID );
 		$_POST['user_login'] = 'eun_hacked_login';
 
 		( new EUN_EditUsernames() )->update_username( $target->ID );
@@ -162,6 +180,7 @@ class EUN_UsernameUpdateTest extends PluginTestCase {
 		$target = $this->create_test_user( 'subscriber', array( 'user_login' => 'eun_same_login' ) );
 
 		wp_set_current_user( $admin->ID );
+		$this->set_update_user_nonce( $target->ID );
 		$_POST['user_login'] = 'eun_same_login';
 
 		( new EUN_EditUsernames() )->update_username( $target->ID );
@@ -184,6 +203,7 @@ class EUN_UsernameUpdateTest extends PluginTestCase {
 		) );
 
 		wp_set_current_user( $admin->ID );
+		$this->set_update_user_nonce( $target->ID );
 		$_POST['user_login'] = 'eun_twin_name_updated';
 
 		( new EUN_EditUsernames() )->update_username( $target->ID );
@@ -193,5 +213,36 @@ class EUN_UsernameUpdateTest extends PluginTestCase {
 
 		$this->assertEquals( 'eun_twin_name_updated', $updated->user_login );
 		$this->assertEquals( 'eun_twin_name_updated', $updated->display_name );
+	}
+
+	/**
+	 * A submission with a missing/invalid nonce must be rejected by
+	 * check_admin_referer() (wp_die) and must not touch the target login.
+	 * Skipped on plugin versions that don't call check_admin_referer() yet.
+	 */
+	public function test_save_handler_rejects_missing_or_invalid_nonce() {
+		$plugin_file = WP_PLUGIN_DIR . '/edit-usernames/inc/edit-usernames.php';
+
+		if ( strpos( file_get_contents( $plugin_file ), 'check_admin_referer' ) === false ) {
+			$this->markTestSkipped( 'Installed plugin version does not call check_admin_referer().' );
+		}
+
+		$admin  = $this->create_test_user( 'administrator' );
+		$target = $this->create_test_user( 'subscriber', array( 'user_login' => 'eun_nonce_guarded_login' ) );
+
+		wp_set_current_user( $admin->ID );
+		$_POST['_wpnonce']    = 'invalid_nonce';
+		$_REQUEST['_wpnonce'] = 'invalid_nonce';
+		$_POST['user_login']  = 'eun_hacked_via_bad_nonce';
+
+		$this->expectException( WPDieException::class );
+
+		try {
+			( new EUN_EditUsernames() )->update_username( $target->ID );
+		} finally {
+			clean_user_cache( $target->ID );
+			$updated = get_user_by( 'ID', $target->ID );
+			$this->assertEquals( 'eun_nonce_guarded_login', $updated->user_login );
+		}
 	}
 }

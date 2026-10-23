@@ -188,7 +188,24 @@ require_once $_tests_dir . '/includes/functions.php';
 tests_add_filter( 'muplugins_loaded', function () use ( $manifest ) {
 	$plugins_dir = WP_PLUGIN_DIR;
 
-	$dir = function ( $slug ) use ( $manifest, $plugins_dir ) {
+	// When MM_TESTS_PLUGIN is set (always true for the Makefile's per-plugin
+	// test loop and the CI matrix — see bin/manifest.php's build_matrix()),
+	// this process loads only that one plugin's code, never the other eight.
+	// Process isolation, not this flag alone, is what actually protects
+	// against cross-plugin leakage (e.g. a WooCommerce class stub some
+	// plugin's tests define at file scope breaking another plugin's
+	// class_exists('WooCommerce') checks) — but every call site below reads
+	// paths through $dir(), so gating it here is enough to realize that
+	// isolation whenever a run has opted in via the env var. Leaving
+	// MM_TESTS_PLUGIN unset preserves the old "load every plugin" behavior
+	// (e.g. Docker's make test-unit/test-integration, which still run the
+	// whole suite in one process).
+	$only_plugin = getenv( 'MM_TESTS_PLUGIN' ) ?: null;
+
+	$dir = function ( $slug ) use ( $manifest, $plugins_dir, $only_plugin ) {
+		if ( null !== $only_plugin && $slug !== $only_plugin ) {
+			return null;
+		}
 		$plugin = mm_tests_find_plugin( $manifest, $slug );
 		return $plugin ? $plugins_dir . '/' . $plugin['install_dir'] : null;
 	};
