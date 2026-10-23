@@ -79,7 +79,11 @@ class SEWM_WooCommerceNl2brTest extends PluginTestCase {
 		$subject = 'Your order is complete';
 		apply_filters( 'woocommerce_mail_callback_params', array( 'to@example.com', $subject, "line1\nline2", '', array() ), null );
 		wpMandrill::mail( 'to@example.com', $subject, "line1\nline2" );
-		do_action( 'woocommerce_email_sent', true, 'order-1', null );
+
+		// Don't fire the real action: WooCommerce's own listener on
+		// 'woocommerce_email_sent' requires a real WC_Email argument.
+		$this->assertNotFalse( has_action( 'woocommerce_email_sent', array( 'wpMandrill', 'clearWooCommerceEmail' ) ) );
+		wpMandrill::clearWooCommerceEmail();
 
 		// A completely unrelated email sent later in the same request.
 		wpMandrill::mail( 'someone-else@example.com', 'Newsletter', "line1\nline2" );
@@ -126,7 +130,11 @@ class SEWM_WooCommerceNl2brTest extends PluginTestCase {
 
 		$subject = 'Your order is complete';
 		apply_filters( 'woocommerce_mail_callback_params', array( 'to@example.com', $subject, "line1\nline2", '', array() ), null );
-		do_action( 'woocommerce_email_sent', true, 'order-1', null );
+
+		// Don't fire the real action: WooCommerce's own listener on
+		// 'woocommerce_email_sent' requires a real WC_Email argument.
+		$this->assertNotFalse( has_action( 'woocommerce_email_sent', array( 'wpMandrill', 'clearWooCommerceEmail' ) ) );
+		wpMandrill::clearWooCommerceEmail();
 
 		// Marker was cleared before the send, so even the same subject gets nl2br'd now.
 		wpMandrill::mail( 'to@example.com', $subject, "line1\nline2" );
