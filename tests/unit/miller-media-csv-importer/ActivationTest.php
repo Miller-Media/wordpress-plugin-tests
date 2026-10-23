@@ -21,6 +21,20 @@ class MMCSV_ActivationTest extends PluginTestCase {
 	public function test_importer_is_registered_on_plugins_loaded() {
 		global $wp_importers;
 
+		$this->assertNotFalse( has_action( 'plugins_loaded', 'mmcsv_initialize_importer' ) );
+
+		if ( ! function_exists( 'register_importer' ) ) {
+			require_once ABSPATH . 'wp-admin/includes/import.php';
+		}
+
+		mmcsv_initialize_importer();
+
+		$this->assertIsArray( $wp_importers );
 		$this->assertArrayHasKey( 'csv', $wp_importers );
+
+		$callback = $wp_importers['csv'][2];
+		$this->assertIsArray( $callback );
+		$this->assertInstanceOf( 'MMCSV_CSV_Importer', $callback[0] );
+		$this->assertSame( 'dispatch', $callback[1] );
 	}
 }
