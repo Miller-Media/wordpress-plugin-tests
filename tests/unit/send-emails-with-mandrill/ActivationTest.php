@@ -12,6 +12,6 @@ class SEWM_ActivationTest extends PluginTestCase {
 
 	public function test_constants_defined() {
 		$this->assertTrue( defined( 'SEWM_VERSION' ) );
-		$this->assertEquals( '1.4.3', SEWM_VERSION );
+		$this->assertEquals( $this->plugin_version( 'send-emails-with-mandrill' ), SEWM_VERSION );
 	}
 }

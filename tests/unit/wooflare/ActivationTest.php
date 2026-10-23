@@ -13,7 +13,7 @@ class WOOCF_ActivationTest extends PluginTestCase {
 
 	public function test_constants_defined() {
 		$this->assertTrue( defined( 'WOOCF_PLUGIN_VERSION' ) );
-		$this->assertEquals( '1.0.0', WOOCF_PLUGIN_VERSION );
+		$this->assertEquals( $this->plugin_version( 'wooflare' ), WOOCF_PLUGIN_VERSION );
 	}
 
 	public function test_helpers_parse_base_domain() {

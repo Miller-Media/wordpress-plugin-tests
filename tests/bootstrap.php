@@ -2,8 +2,8 @@
 /**
  * Bootstrap file for the WordPress plugin test suite.
  *
- * Downloads and configures the WordPress test library, loads all plugins,
- * and registers mock API interceptors.
+ * Downloads and configures the WordPress test library, loads every plugin
+ * declared in plugins.json, and registers mock API interceptors.
  */
 
 // Load .env file if it exists (for integration tests)
@@ -25,11 +25,29 @@ if ( file_exists( $env_file ) ) {
 	}
 }
 
-// PHPUnit Polyfills (required by WP test suite)
+// Manifest-driven helpers (plugins.json access, version-header parsing).
+require_once __DIR__ . '/_helpers/Manifest.php';
+
+$manifest = mm_tests_load_manifest();
+
+// PHPUnit Polyfills (required by WP test suite). Honor an explicit env var
+// first, then COMPOSER_HOME (falling back to the conventional root-user path).
 if ( ! defined( 'WP_TESTS_PHPUNIT_POLYFILLS_PATH' ) ) {
-	$polyfills_path = '/root/.composer/vendor/yoast/phpunit-polyfills';
-	if ( file_exists( $polyfills_path . '/phpunitpolyfills-autoload.php' ) ) {
-		define( 'WP_TESTS_PHPUNIT_POLYFILLS_PATH', $polyfills_path );
+	$polyfills_candidates = array();
+
+	$env_polyfills_path = getenv( 'WP_TESTS_PHPUNIT_POLYFILLS_PATH' );
+	if ( $env_polyfills_path ) {
+		$polyfills_candidates[] = $env_polyfills_path;
+	}
+
+	$composer_home          = getenv( 'COMPOSER_HOME' ) ?: '/root/.composer';
+	$polyfills_candidates[] = $composer_home . '/vendor/yoast/phpunit-polyfills';
+
+	foreach ( $polyfills_candidates as $candidate ) {
+		if ( $candidate && file_exists( $candidate . '/phpunitpolyfills-autoload.php' ) ) {
+			define( 'WP_TESTS_PHPUNIT_POLYFILLS_PATH', $candidate );
+			break;
+		}
 	}
 }
 
@@ -87,7 +105,7 @@ PHP;
 
 if ( ! file_exists( $_tests_dir . '/includes/functions.php' ) ) {
 	echo "ERROR: Could not find WordPress test suite at {$_tests_dir}/includes/functions.php\n";
-	echo "Run `make setup-tests` inside the Docker container first.\n";
+	echo "Run `bin/setup-native.sh` (native) or `make setup-tests` (Docker) first.\n";
 	exit( 1 );
 }
 
@@ -96,109 +114,180 @@ require_once $_tests_dir . '/includes/functions.php';
 
 /**
  * Load plugins before WordPress finishes loading.
+ *
+ * Which files get required (the whole main plugin file vs. just its class
+ * files) mirrors each plugin's own side effects: plugins whose main file
+ * unconditionally instantiates objects / registers hooks that would be
+ * noisy or redundant in tests only have their class files required, with
+ * their version (and any other) constants predefined from the manifest.
+ * Plugins whose main file is otherwise side-effect-light are required in
+ * full, so their constants are simply defined by the plugin itself.
  */
-tests_add_filter( 'muplugins_loaded', function () {
+tests_add_filter( 'muplugins_loaded', function () use ( $manifest ) {
 	$plugins_dir = WP_PLUGIN_DIR;
 
-	// Define constants that plugins expect
-	if ( ! defined( 'CFIP_PLUGIN_VERSION' ) ) {
-		define( 'CFIP_PLUGIN_VERSION', '1.0.1' );
-	}
-	if ( ! defined( 'CFIP_MAIN_CLOUDFLARE_PLUGIN_DIR' ) ) {
-		define( 'CFIP_MAIN_CLOUDFLARE_PLUGIN_DIR', $plugins_dir . '/cloudflare' );
-	}
-	if ( ! defined( 'WOOCF_PLUGIN_VERSION' ) ) {
-		define( 'WOOCF_PLUGIN_VERSION', '1.0.0' );
-	}
-	if ( ! defined( 'WOOCF_MAIN_CLOUDFLARE_PLUGIN_DIR' ) ) {
-		define( 'WOOCF_MAIN_CLOUDFLARE_PLUGIN_DIR', $plugins_dir . '/cloudflare' );
-	}
-	if ( ! defined( 'EUN_SELFEDIT' ) ) {
-		define( 'EUN_SELFEDIT', false );
-	}
-	if ( ! defined( 'EUN_PLUGIN_PATH' ) ) {
-		define( 'EUN_PLUGIN_PATH', $plugins_dir . '/edit-usernames/' );
-	}
-	if ( ! defined( 'EUN_PLUGIN_NAME' ) ) {
-		define( 'EUN_PLUGIN_NAME', 'Edit Usernames' );
-	}
-	if ( ! defined( 'EUN_SETTINGS_PREFIX' ) ) {
-		define( 'EUN_SETTINGS_PREFIX', 'eun_setting_' );
-	}
-	if ( ! defined( 'PTC_PLUGIN_PATH' ) ) {
-		define( 'PTC_PLUGIN_PATH', $plugins_dir . '/protect-the-children/' );
-	}
-	if ( ! defined( 'PTC_PLUGIN_URL' ) ) {
-		define( 'PTC_PLUGIN_URL', 'http://example.org/wp-content/plugins/protect-the-children/' );
-	}
-	if ( ! defined( 'PROTECT_THE_CHILDREN_PLUGIN_VERSION' ) ) {
-		define( 'PROTECT_THE_CHILDREN_PLUGIN_VERSION', '1.4.0' );
-	}
-	if ( ! defined( 'SEWM_VERSION' ) ) {
-		define( 'SEWM_VERSION', '1.4.3' );
-	}
-	if ( ! defined( 'SEWM_URL' ) ) {
-		define( 'SEWM_URL', 'http://example.org/wp-content/plugins/send-emails-with-mandrill/' );
-	}
-	if ( ! defined( 'SEWM_PATH' ) ) {
-		define( 'SEWM_PATH', $plugins_dir . '/send-emails-with-mandrill/' );
-	}
-	if ( ! defined( 'SEWM_BASE' ) ) {
-		define( 'SEWM_BASE', 'send-emails-with-mandrill/wpmandrill.php' );
-	}
+	$dir = function ( $slug ) use ( $manifest, $plugins_dir ) {
+		$plugin = mm_tests_find_plugin( $manifest, $slug );
+		return $plugin ? $plugins_dir . '/' . $plugin['install_dir'] : null;
+	};
 
-	// Load Cloudflare IP Blacklist
-	$cfip_path = $plugins_dir . '/ip-blacklist-for-cloudflare';
-	if ( file_exists( $cfip_path . '/classes/Helpers.php' ) ) {
+	$version = function ( $slug ) use ( $manifest, $plugins_dir ) {
+		return mm_tests_plugin_header_version( $manifest, $plugins_dir, $slug );
+	};
+
+	// ── IP Blacklist for Cloudflare ────────────────────────────
+	$cfip_path = $dir( 'cloudflare-ip-blacklist' );
+	if ( $cfip_path && file_exists( $cfip_path . '/classes/Helpers.php' ) ) {
+		if ( ! defined( 'CFIP_PLUGIN_VERSION' ) ) {
+			define( 'CFIP_PLUGIN_VERSION', $version( 'cloudflare-ip-blacklist' ) );
+		}
+		if ( ! defined( 'CFIP_MAIN_CLOUDFLARE_PLUGIN_DIR' ) ) {
+			define( 'CFIP_MAIN_CLOUDFLARE_PLUGIN_DIR', $plugins_dir . '/cloudflare' );
+		}
+
 		require_once $cfip_path . '/classes/Helpers.php';
 		require_once $cfip_path . '/classes/SiteSettings.php';
 		require_once $cfip_path . '/classes/CloudflareAPIController.php';
 		require_once $cfip_path . '/classes/Plugin.php';
 	}
 
-	// Load Edit Usernames
-	$eun_path = $plugins_dir . '/edit-usernames';
-	if ( file_exists( $eun_path . '/inc/edit-usernames.php' ) ) {
+	// ── Edit Usernames ──────────────────────────────────────────
+	$eun_path = $dir( 'edit-usernames' );
+	if ( $eun_path && file_exists( $eun_path . '/inc/edit-usernames.php' ) ) {
+		if ( ! defined( 'EUN_SELFEDIT' ) ) {
+			define( 'EUN_SELFEDIT', false );
+		}
+		if ( ! defined( 'EUN_PLUGIN_PATH' ) ) {
+			define( 'EUN_PLUGIN_PATH', $eun_path . '/' );
+		}
+		if ( ! defined( 'EUN_PLUGIN_NAME' ) ) {
+			define( 'EUN_PLUGIN_NAME', 'Edit Usernames' );
+		}
+		if ( ! defined( 'EUN_SETTINGS_PREFIX' ) ) {
+			define( 'EUN_SETTINGS_PREFIX', 'eun_setting_' );
+		}
+
 		require_once $eun_path . '/inc/settings.php';
 		require_once $eun_path . '/inc/helpers.php';
 		require_once $eun_path . '/inc/edit-usernames.php';
 	}
 
-	// Load Expire Passwords
-	$expass_path = $plugins_dir . '/expire-user-passwords';
-	if ( file_exists( $expass_path . '/expire-user-passwords.php' ) ) {
+	// ── Expire User Passwords (main file is self-contained; load in full) ─
+	$expass_path = $dir( 'expire-passwords' );
+	if ( $expass_path && file_exists( $expass_path . '/expire-user-passwords.php' ) ) {
 		require_once $expass_path . '/expire-user-passwords.php';
 	}
 
-	// Load Protect the Children
-	$ptc_path = $plugins_dir . '/protect-the-children';
-	if ( file_exists( $ptc_path . '/_inc/helpers.php' ) ) {
+	// ── Protect the Children ────────────────────────────────────
+	$ptc_path = $dir( 'protect-the-children' );
+	if ( $ptc_path && file_exists( $ptc_path . '/_inc/helpers.php' ) ) {
+		if ( ! defined( 'PTC_PLUGIN_PATH' ) ) {
+			define( 'PTC_PLUGIN_PATH', $ptc_path . '/' );
+		}
+		if ( ! defined( 'PTC_PLUGIN_URL' ) ) {
+			define( 'PTC_PLUGIN_URL', 'http://example.org/wp-content/plugins/protect-the-children/' );
+		}
+		if ( ! defined( 'PROTECT_THE_CHILDREN_PLUGIN_VERSION' ) ) {
+			define( 'PROTECT_THE_CHILDREN_PLUGIN_VERSION', $version( 'protect-the-children' ) );
+		}
+
 		require_once $ptc_path . '/_inc/helpers.php';
 		require_once $ptc_path . '/_inc/admin.php';
 	}
 
-	// Load Send Emails with Mandrill (load class files but don't call on_load to avoid redefining wp_mail)
-	$mandrill_path = $plugins_dir . '/send-emails-with-mandrill';
-	if ( file_exists( $mandrill_path . '/lib/mandrill.class.php' ) ) {
+	// ── Send Emails with Mandrill (load class files but don't call
+	//    on_load so wp_mail() is never redefined) ─────────────────
+	$mandrill_path = $dir( 'send-emails-with-mandrill' );
+	if ( $mandrill_path && file_exists( $mandrill_path . '/lib/mandrill.class.php' ) ) {
+		if ( ! defined( 'SEWM_VERSION' ) ) {
+			define( 'SEWM_VERSION', $version( 'send-emails-with-mandrill' ) );
+		}
+		if ( ! defined( 'SEWM_URL' ) ) {
+			define( 'SEWM_URL', 'http://example.org/wp-content/plugins/send-emails-with-mandrill/' );
+		}
+		if ( ! defined( 'SEWM_PATH' ) ) {
+			define( 'SEWM_PATH', $mandrill_path . '/' );
+		}
+		if ( ! defined( 'SEWM_BASE' ) ) {
+			define( 'SEWM_BASE', 'send-emails-with-mandrill/wpmandrill.php' );
+		}
+
 		require_once $mandrill_path . '/lib/mandrill.class.php';
 		require_once $mandrill_path . '/lib/wpMandrill.class.php';
 	}
 
-	// Load WooCommerce if available (required for Wooflare)
-	$wc_path = $plugins_dir . '/woocommerce/woocommerce.php';
-	if ( file_exists( $wc_path ) ) {
-		require_once $wc_path;
+	// ── WooCommerce (only loaded if a checked-out plugin needs it) ─
+	$needs_woocommerce = false;
+	foreach ( $manifest['plugins'] as $plugin ) {
+		if ( in_array( 'woocommerce', $plugin['dependencies'], true ) && $dir( $plugin['slug'] ) && is_dir( $dir( $plugin['slug'] ) ) ) {
+			$needs_woocommerce = true;
+			break;
+		}
+	}
+	if ( $needs_woocommerce ) {
+		$wc_path = $plugins_dir . '/woocommerce/woocommerce.php';
+		if ( file_exists( $wc_path ) ) {
+			require_once $wc_path;
+		}
 	}
 
-	// Load Wooflare
-	$woocf_path = $plugins_dir . '/wooflare';
-	if ( file_exists( $woocf_path . '/classes/Helpers.php' ) ) {
+	// ── Wooflare ─────────────────────────────────────────────────
+	$woocf_path = $dir( 'wooflare' );
+	if ( $woocf_path && file_exists( $woocf_path . '/classes/Helpers.php' ) ) {
+		if ( ! defined( 'WOOCF_PLUGIN_VERSION' ) ) {
+			define( 'WOOCF_PLUGIN_VERSION', $version( 'wooflare' ) );
+		}
+		if ( ! defined( 'WOOCF_MAIN_CLOUDFLARE_PLUGIN_DIR' ) ) {
+			define( 'WOOCF_MAIN_CLOUDFLARE_PLUGIN_DIR', $plugins_dir . '/cloudflare' );
+		}
+
 		require_once $woocf_path . '/classes/Helpers.php';
 		require_once $woocf_path . '/classes/SiteSettings.php';
 		require_once $woocf_path . '/classes/CloudflareAPIController.php';
 		require_once $woocf_path . '/classes/Plugin.php';
 	}
-});
+
+	// ── One-Off Emails for WooCommerce ──────────────────────────
+	$wooe_path = $dir( 'one-off-emails-for-woocommerce' );
+	if ( $wooe_path && file_exists( $wooe_path . '/classes/Plugin.php' ) ) {
+		if ( ! defined( 'WOOE_PLUGIN_VERSION' ) ) {
+			define( 'WOOE_PLUGIN_VERSION', $version( 'one-off-emails-for-woocommerce' ) );
+		}
+
+		require_once $wooe_path . '/classes/Plugin.php';
+	}
+
+	// ── Miller Media Server File Import ─────────────────────────
+	$mmsfi_path = $dir( 'import-from-server' );
+	if ( $mmsfi_path && file_exists( $mmsfi_path . '/inc/class-mmsfi-file-browser.php' ) ) {
+		if ( ! defined( 'MMSFI_PLUGIN_VERSION' ) ) {
+			define( 'MMSFI_PLUGIN_VERSION', $version( 'import-from-server' ) );
+		}
+		if ( ! defined( 'MMSFI_PLUGIN_PATH' ) ) {
+			define( 'MMSFI_PLUGIN_PATH', $mmsfi_path . '/' );
+		}
+		if ( ! defined( 'MMSFI_PLUGIN_URL' ) ) {
+			define( 'MMSFI_PLUGIN_URL', 'http://example.org/wp-content/plugins/miller-media-server-file-import/' );
+		}
+
+		require_once $mmsfi_path . '/inc/class-mmsfi-file-browser.php';
+		require_once $mmsfi_path . '/inc/class-mmsfi-importer.php';
+		require_once $mmsfi_path . '/inc/class-mmsfi-settings.php';
+		require_once $mmsfi_path . '/inc/class-mmsfi-plugin.php';
+	}
+
+	// ── Miller Media CSV Importer (needs WP_LOAD_IMPORTERS to load
+	//    at all — its own main file is otherwise side-effect-light,
+	//    so it's loaded in full for complete fidelity) ─────────────
+	$mmcsv_path = $dir( 'miller-media-csv-importer' );
+	if ( $mmcsv_path && file_exists( $mmcsv_path . '/miller-media-csv-importer.php' ) ) {
+		if ( ! defined( 'WP_LOAD_IMPORTERS' ) ) {
+			define( 'WP_LOAD_IMPORTERS', true );
+		}
+
+		require_once $mmcsv_path . '/miller-media-csv-importer.php';
+	}
+} );
 
 // Load the WP test suite
 require $_tests_dir . '/includes/bootstrap.php';

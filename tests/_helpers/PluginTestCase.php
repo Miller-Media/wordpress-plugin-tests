@@ -90,6 +90,18 @@ class PluginTestCase extends WP_UnitTestCase {
 	}
 
 	/**
+	 * Get the real version of a plugin, as declared in its own main file
+	 * header — read live from disk rather than hardcoded, so tests never
+	 * drift out of sync with the plugin being tested.
+	 *
+	 * @param string $slug Manifest slug (see plugins.json).
+	 * @return string|null
+	 */
+	protected function plugin_version( $slug ) {
+		return mm_tests_plugin_header_version( mm_tests_load_manifest(), WP_PLUGIN_DIR, $slug );
+	}
+
+	/**
 	 * Assert that a WordPress hook has a specific callback registered.
 	 *
 	 * @param string $hook     Hook name.
