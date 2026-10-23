@@ -108,4 +108,90 @@ class EUN_UsernameUpdateTest extends PluginTestCase {
 
 		$this->assertFalse( current_user_can( 'edit_users' ) );
 	}
+
+	public function tearDown(): void {
+		unset( $_POST['user_login'] );
+		parent::tearDown();
+	}
+
+	/**
+	 * Exercises the plugin's actual save handler (not a simulation) to confirm
+	 * an admin-submitted username change is persisted, which is what the
+	 * user-edit.php "Edit" button workflow ultimately relies on.
+	 */
+	public function test_save_handler_updates_login_for_admin_with_capability() {
+		$admin  = $this->create_test_user( 'administrator' );
+		$target = $this->create_test_user( 'subscriber', array( 'user_login' => 'eun_old_login' ) );
+
+		wp_set_current_user( $admin->ID );
+		$_POST['user_login'] = 'eun_new_login';
+
+		( new EUN_EditUsernames() )->update_username( $target->ID );
+
+		clean_user_cache( $target->ID );
+		$updated = get_user_by( 'ID', $target->ID );
+
+		$this->assertEquals( 'eun_new_login', $updated->user_login );
+	}
+
+	/**
+	 * Without edit_users/administrator/manage_woocommerce capability, the save
+	 * handler must not touch the target user's login even if user_login is posted.
+	 */
+	public function test_save_handler_ignores_submission_without_capability() {
+		$subscriber = $this->create_test_user( 'subscriber' );
+		$target     = $this->create_test_user( 'subscriber', array( 'user_login' => 'eun_untouched_login' ) );
+
+		wp_set_current_user( $subscriber->ID );
+		$_POST['user_login'] = 'eun_hacked_login';
+
+		( new EUN_EditUsernames() )->update_username( $target->ID );
+
+		clean_user_cache( $target->ID );
+		$updated = get_user_by( 'ID', $target->ID );
+
+		$this->assertEquals( 'eun_untouched_login', $updated->user_login );
+	}
+
+	/**
+	 * Re-submitting the same username (e.g. form saved without touching the
+	 * field) must be a no-op and must not error.
+	 */
+	public function test_save_handler_noop_when_username_unchanged() {
+		$admin  = $this->create_test_user( 'administrator' );
+		$target = $this->create_test_user( 'subscriber', array( 'user_login' => 'eun_same_login' ) );
+
+		wp_set_current_user( $admin->ID );
+		$_POST['user_login'] = 'eun_same_login';
+
+		( new EUN_EditUsernames() )->update_username( $target->ID );
+
+		clean_user_cache( $target->ID );
+		$updated = get_user_by( 'ID', $target->ID );
+
+		$this->assertEquals( 'eun_same_login', $updated->user_login );
+	}
+
+	/**
+	 * When display_name mirrors the old username (WordPress' default for new
+	 * users), the save handler should keep display_name in sync too.
+	 */
+	public function test_save_handler_syncs_display_name_when_matching_login() {
+		$admin  = $this->create_test_user( 'administrator' );
+		$target = $this->create_test_user( 'subscriber', array(
+			'user_login'   => 'eun_twin_name',
+			'display_name' => 'eun_twin_name',
+		) );
+
+		wp_set_current_user( $admin->ID );
+		$_POST['user_login'] = 'eun_twin_name_updated';
+
+		( new EUN_EditUsernames() )->update_username( $target->ID );
+
+		clean_user_cache( $target->ID );
+		$updated = get_user_by( 'ID', $target->ID );
+
+		$this->assertEquals( 'eun_twin_name_updated', $updated->user_login );
+		$this->assertEquals( 'eun_twin_name_updated', $updated->display_name );
+	}
 }
