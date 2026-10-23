@@ -3,6 +3,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        PHP_VERSION: ${PHP_VERSION:-8.2}
+        WP_VERSION: ${WP_VERSION:-7.1}
     ports:
       - "8080:80"
     environment:
@@ -11,23 +14,29 @@ services:
       WORDPRESS_DB_PASSWORD: wordpress
       WORDPRESS_DB_NAME: wordpress
       WORDPRESS_DEBUG: 1
+      # WP_VERSION is deliberately NOT set here — see the Dockerfile note.
+      # tests/bootstrap.php resolves the test library version by reading
+      # the core actually installed at WP_CORE_DIR (default /var/www/html).
+    # Per-plugin mounts live in docker/docker-compose.plugins.yml, generated
+    # from plugins.json by `make compose` (run automatically by `make start`).
     volumes:
-      # Mount plugins into wp-content/plugins
-      - ../cloudflare-ip-blacklist:/var/www/html/wp-content/plugins/ip-blacklist-for-cloudflare
-      - ../edit-usernames:/var/www/html/wp-content/plugins/edit-usernames
-      - ../expire-passwords:/var/www/html/wp-content/plugins/expire-user-passwords
-      - ../protect-the-children:/var/www/html/wp-content/plugins/protect-the-children
-      - ../send-emails-with-mandrill:/var/www/html/wp-content/plugins/send-emails-with-mandrill
-      - ../wooflare:/var/www/html/wp-content/plugins/wooflare
       # Mount tests directory
       - ../tests:/var/www/tests
       # Mount phpcs config
       - ../phpcs.xml:/var/www/phpcs.xml
+      # Mount the manifest + CLI so the entrypoint can activate plugins
+      # without a hardcoded list (see docker-entrypoint-custom.sh)
+      - ../plugins.json:/var/www/plugins.json
+      - ../bin:/var/www/bin
     depends_on:
       db:
         condition: service_healthy
-    networks:
-      - wp-test
+    # No explicit `networks:` — these three services share Compose's
+    # implicit per-project default network, which already gives them
+    # name-based discovery (db, db-test, wordpress). Leaving it implicit
+    # (rather than a named custom network) is what lets
+    # docker-compose.host-network.yml add `network_mode: host` on top
+    # without an explicit `networks:` key to conflict with it.
 
   db:
     image: mysql:8.0
@@ -43,8 +52,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    networks:
-      - wp-test
 
   # Separate database for tests so they don't interfere with the dev site
   db-test:
@@ -61,11 +68,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    networks:
-      - wp-test
 
 volumes:
   db_data:
-
-networks:
-  wp-test:

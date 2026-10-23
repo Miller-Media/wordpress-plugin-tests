@@ -1,0 +1,572 @@
+name: CI
+
+# Dual-purpose workflow:
+#   1. Runs directly in this repo (wordpress-plugin-tests) on PRs/pushes that
+#      touch shared harness files — tests every plugin affected by the change.
+#   2. Reusable (workflow_call) — a plugin repo's caller workflow
+#      (docs/caller-workflows/ci.yml) invokes this with `plugin: <slug>` to
+#      test just that one plugin against this harness.
+#
+# Third-party actions are pinned to major-version tags, not commit SHAs —
+# see the "Pinned actions" note in CLAUDE.md for why, and let Dependabot
+# (.github/dependabot.yml) keep them current.
+#
+# The single required check to configure branch protection against is the
+# "ci-result" job below — it fails if anything it depends on failed. The
+# "nightly (non-blocking)" job is NOT part of ci-result by design — see its
+# comment below.
+#
+# `schedule` only ever fires for this workflow's direct copy in THIS repo
+# (a plugin repo invoking ci.yml via workflow_call never gets its own cron
+# trigger), which is exactly what powers the weekly nightly-matrix run.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 7 * * 1' # Mondays 07:00 UTC — weekly nightly/trunk run, all plugins
+  workflow_call:
+    inputs:
+      plugin:
+        description: 'Manifest slug to test. Leave empty to auto-detect from changed files (harness-repo trigger only).'
+        required: false
+        type: string
+        default: ''
+      harness_ref:
+        description: 'Ref of Miller-Media/wordpress-plugin-tests to check out.'
+        required: false
+        type: string
+        default: 'main'
+    secrets:
+      HARNESS_DEPLOY_KEY:
+        description: 'Deploy key with read access to Miller-Media/wordpress-plugin-tests (and, for harness-triggered runs, the plugin repos). Only required while the harness repo is private — see docs/caller-workflows/README.md.'
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Which plugins does this change affect? ──────────────────────
+  changes:
+    name: CI / changes
+    runs-on: ubuntu-latest
+    outputs:
+      plugins: ${{ steps.affected.outputs.plugins }}
+    steps:
+      - name: Checkout harness (direct trigger)
+        if: ${{ inputs.plugin == '' }}
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout harness (reusable call)
+        if: ${{ inputs.plugin != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: Miller-Media/wordpress-plugin-tests
+          ref: ${{ inputs.harness_ref }}
+          ssh-key: ${{ secrets.HARNESS_DEPLOY_KEY }}
+          fetch-depth: 0
+
+      - name: Determine affected plugins
+        id: affected
+        run: |
+          set -euo pipefail
+
+          if [ -n "${{ inputs.plugin }}" ]; then
+            echo "plugins=[\"${{ inputs.plugin }}\"]" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            PLUGINS_JSON=$(php bin/manifest.php slugs | php -r '$l = array_values(array_filter(array_map("trim", explode("\n", stream_get_contents(STDIN))))); echo json_encode($l);')
+            echo "Scheduled run — testing every manifest plugin: $PLUGINS_JSON"
+            echo "plugins=$PLUGINS_JSON" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$BASE_SHA" ]; then
+            BASE_SHA="${{ github.event.before }}"
+          fi
+          if [ -z "$BASE_SHA" ] || ! git cat-file -e "$BASE_SHA" 2>/dev/null; then
+            BASE_SHA=$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)
+          fi
+
+          git diff --name-only "$BASE_SHA" "${{ github.sha }}" > /tmp/changed.txt
+          echo "Changed files:"
+          cat /tmp/changed.txt
+
+          PLUGINS_JSON=$(php bin/manifest.php affected - < /tmp/changed.txt \
+            | php -r '$l = array_values(array_filter(array_map("trim", explode("\n", stream_get_contents(STDIN))))); echo json_encode($l);')
+          echo "Affected plugins: $PLUGINS_JSON"
+          echo "plugins=$PLUGINS_JSON" >> "$GITHUB_OUTPUT"
+
+  # ── Build the php x wp (x wc) matrix for the affected plugins ───
+  # (the weekly `schedule` trigger only drives the nightly job below, not
+  # the blocking matrix/test/ci-result chain)
+  matrix:
+    name: CI / matrix
+    needs: changes
+    if: ${{ github.event_name != 'schedule' }}
+    runs-on: ubuntu-latest
+    outputs:
+      include: ${{ steps.build.outputs.include }}
+    steps:
+      - name: Checkout harness (direct trigger)
+        if: ${{ inputs.plugin == '' }}
+        uses: actions/checkout@v4
+
+      - name: Checkout harness (reusable call)
+        if: ${{ inputs.plugin != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: Miller-Media/wordpress-plugin-tests
+          ref: ${{ inputs.harness_ref }}
+          ssh-key: ${{ secrets.HARNESS_DEPLOY_KEY }}
+
+      - name: Build matrix
+        id: build
+        run: |
+          set -euo pipefail
+
+          PLUGINS='${{ needs.changes.outputs.plugins }}'
+          SLUGS=$(php -r '$p = json_decode($argv[1], true); echo implode(",", $p);' "$PLUGINS")
+
+          if [ -z "$SLUGS" ]; then
+            echo "No affected plugins — nothing to test."
+            echo "include=[]" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          MATRIX=$(php bin/manifest.php matrix --plugins="$SLUGS" | php -r '
+            $rows = json_decode(stream_get_contents(STDIN), true);
+            $manifest = json_decode(file_get_contents("plugins.json"), true);
+            $by_slug = array();
+            foreach ($manifest["plugins"] as $p) { $by_slug[$p["slug"]] = $p; }
+            foreach ($rows as &$r) {
+              $r["dir"]         = $by_slug[$r["slug"]]["dir"];
+              $r["repo"]        = $by_slug[$r["slug"]]["repo"];
+              $r["install_dir"] = $by_slug[$r["slug"]]["install_dir"];
+            }
+            echo json_encode($rows);
+          ')
+          echo "Matrix: $MATRIX"
+          echo "include=$MATRIX" >> "$GITHUB_OUTPUT"
+
+  # ── Run the test suite for every (plugin, php, wp) combination ──
+  test:
+    name: "CI / test (${{ matrix.slug }}, php ${{ matrix.php }}, wp ${{ matrix.wp }})"
+    needs: matrix
+    if: ${{ github.event_name != 'schedule' && needs.matrix.outputs.include != '[]' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.matrix.outputs.include) }}
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: yes
+          MYSQL_DATABASE: wordpress_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+
+    steps:
+      - name: Checkout harness (direct trigger)
+        if: ${{ inputs.plugin == '' }}
+        uses: actions/checkout@v4
+        with:
+          path: harness
+
+      - name: Checkout harness (reusable call)
+        if: ${{ inputs.plugin != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: Miller-Media/wordpress-plugin-tests
+          ref: ${{ inputs.harness_ref }}
+          ssh-key: ${{ secrets.HARNESS_DEPLOY_KEY }}
+          path: harness
+
+      # When this run was triggered by the plugin repo's own caller workflow,
+      # the plugin under test IS github.repository — no cross-repo checkout
+      # needed. Otherwise (harness-triggered, or testing a plugin other than
+      # the caller) we check it out explicitly.
+      - name: Checkout plugin under test (caller's own repo)
+        if: ${{ matrix.slug == inputs.plugin }}
+        uses: actions/checkout@v4
+        with:
+          path: harness/${{ matrix.dir }}
+
+      - name: Checkout plugin under test (cross-repo)
+        if: ${{ matrix.slug != inputs.plugin }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.repo }}
+          path: harness/${{ matrix.dir }}
+
+      - name: Set up PHP ${{ matrix.php }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: mysqli, mbstring, zip, gd, xml
+          tools: composer, wp-cli
+
+      - name: Install dev tooling (pinned versions)
+        run: |
+          composer global config allow-plugins.dealerdirect/phpcodesniffer-composer-installer true
+          composer global require --dev \
+            squizlabs/php_codesniffer:3.13.6 \
+            wp-coding-standards/wpcs:3.4.1 \
+            phpcompatibility/phpcompatibility-wp:2.1.8 \
+            dealerdirect/phpcodesniffer-composer-installer:1.2.1 \
+            yoast/phpunit-polyfills:2.0.5 \
+            phpunit/phpunit:^9.6
+          echo "COMPOSER_HOME=$(composer config -g home)" >> "$GITHUB_ENV"
+
+      - name: Verify PHPUnit version
+        run: |
+          "${COMPOSER_HOME}/vendor/bin/phpunit" --version
+          "${COMPOSER_HOME}/vendor/bin/phpunit" --version | grep -q 'PHPUnit 9\.' || { echo "::error::Expected PHPUnit 9.x, got a different version"; exit 1; }
+
+      - name: Install Subversion
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq subversion
+
+      - name: Set up native WP ${{ matrix.wp }} environment
+        working-directory: harness
+        run: |
+          bin/setup-native.sh "${{ matrix.wp }}" \
+            --core-dir="${RUNNER_TEMP}/wp-core" \
+            --tests-dir="${RUNNER_TEMP}/wp-tests-lib" \
+            --db-host=127.0.0.1 --db-user=root --db-pass= --db-name=wordpress_test \
+            ${{ matrix.wc == null && '--skip-woocommerce' || '' }}
+
+      - name: Run PHPUnit
+        working-directory: harness
+        env:
+          WP_CORE_DIR: ${{ runner.temp }}/wp-core
+          WP_TESTS_DIR: ${{ runner.temp }}/wp-tests-lib
+          WP_TESTS_DB_HOST: 127.0.0.1
+          WP_TESTS_DB_NAME: wordpress_test
+          WP_TESTS_DB_USER: root
+          WP_TESTS_DB_PASS: ''
+          WP_TESTS_PHPUNIT_POLYFILLS_PATH: ${{ env.COMPOSER_HOME }}/vendor/yoast/phpunit-polyfills
+          MM_TESTS_PLUGIN: ${{ matrix.slug }}
+          MM_TESTS_WITH_WC: ${{ matrix.with_wc && '1' || '' }}
+        run: make test-plugin-native PLUGIN=${{ matrix.slug }}
+
+      - name: PHPCS (report-only — never fails the job)
+        if: always()
+        continue-on-error: true
+        working-directory: harness
+        run: |
+          mkdir -p "${RUNNER_TEMP}/phpcs-report"
+          IGNORE=$(php bin/manifest.php lint-ignore)
+          "${COMPOSER_HOME}/vendor/bin/phpcs" --standard=phpcs.xml --report=full \
+            ${IGNORE:+--ignore="$IGNORE"} \
+            "${{ matrix.dir }}" > "${RUNNER_TEMP}/phpcs-report/${{ matrix.slug }}.txt" || true
+          {
+            echo "### PHPCS report: ${{ matrix.slug }}"
+            echo '```'
+            cat "${RUNNER_TEMP}/phpcs-report/${{ matrix.slug }}.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload PHPCS report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phpcs-${{ matrix.slug }}-php${{ matrix.php }}-wp${{ matrix.wp }}
+          path: ${{ runner.temp }}/phpcs-report/
+          if-no-files-found: ignore
+
+      - name: Check version consistency
+        working-directory: harness
+        run: php bin/check-versions.php ${{ matrix.slug }}
+
+  # ── One row per affected plugin (deduped — unlike the php/wp test ──
+  # matrix above) carrying just what plugin-check needs: dir, repo,
+  # install_dir, wporg.
+  plugin_check_matrix:
+    name: CI / plugin-check matrix
+    needs: changes
+    if: ${{ github.event_name != 'schedule' && needs.changes.outputs.plugins != '[]' }}
+    runs-on: ubuntu-latest
+    outputs:
+      include: ${{ steps.build.outputs.include }}
+    steps:
+      - name: Checkout harness (direct trigger)
+        if: ${{ inputs.plugin == '' }}
+        uses: actions/checkout@v4
+
+      - name: Checkout harness (reusable call)
+        if: ${{ inputs.plugin != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: Miller-Media/wordpress-plugin-tests
+          ref: ${{ inputs.harness_ref }}
+          ssh-key: ${{ secrets.HARNESS_DEPLOY_KEY }}
+
+      - name: Build plugin-check matrix
+        id: build
+        run: |
+          set -euo pipefail
+
+          PLUGINS='${{ needs.changes.outputs.plugins }}'
+
+          MATRIX=$(php -r '
+            $slugs    = json_decode($argv[1], true);
+            $manifest = json_decode(file_get_contents("plugins.json"), true);
+            $by_slug  = array();
+            foreach ($manifest["plugins"] as $p) { $by_slug[$p["slug"]] = $p; }
+            $rows = array();
+            foreach ($slugs as $slug) {
+              $p = $by_slug[$slug];
+              $rows[] = array(
+                "slug"        => $p["slug"],
+                "dir"         => $p["dir"],
+                "repo"        => $p["repo"],
+                "install_dir" => $p["install_dir"],
+                "check_slug"  => $p["svn_slug"] !== null ? $p["svn_slug"] : $p["install_dir"],
+                "wporg"       => $p["wporg"],
+              );
+            }
+            echo json_encode($rows);
+          ' "$PLUGINS")
+          echo "Plugin-check matrix: $MATRIX"
+          echo "include=$MATRIX" >> "$GITHUB_OUTPUT"
+
+  # ── WordPress.org plugin-check — errors block, warnings never do ──
+  # (ignore-warnings: true). Non-blocking (continue-on-error) for the one
+  # manifest plugin with wporg:false (miller-media-csv-importer), since
+  # that plugin is never deployed to SVN and plugin-check's wp.org-centric
+  # rules aren't a meaningful gate for it.
+  plugin-check:
+    name: "CI / plugin-check (${{ matrix.slug }})"
+    needs: plugin_check_matrix
+    if: ${{ github.event_name != 'schedule' && needs.plugin_check_matrix.outputs.include != '[]' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plugin_check_matrix.outputs.include) }}
+    steps:
+      - name: Checkout plugin under test (caller's own repo)
+        if: ${{ matrix.slug == inputs.plugin }}
+        uses: actions/checkout@v4
+        with:
+          path: ${{ matrix.check_slug }}
+
+      - name: Checkout plugin under test (cross-repo)
+        if: ${{ matrix.slug != inputs.plugin }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.repo }}
+          path: ${{ matrix.check_slug }}
+
+      - name: WordPress Plugin Check
+        # Non-blocking for non-wp.org plugins and for the harness's own runs
+        # (plugin code issues are enforced in each plugin repo's ci / ci-result).
+        continue-on-error: ${{ matrix.wporg == false || inputs.plugin == '' }}
+        uses: wordpress/plugin-check-action@v1
+        with:
+          build-dir: './${{ matrix.check_slug }}'
+          slug: ${{ matrix.check_slug }}
+          exclude-directories: '.github,tests,node_modules,vendor'
+          ignore-warnings: true
+
+  # ── Nightly / beta-RC compatibility (non-blocking) ───────────────
+  #
+  # Runs every affected plugin's suite (on pull_request) or every manifest
+  # plugin (on the weekly `schedule`) against the latest published WP
+  # beta/RC if one exists, otherwise true trunk — core+tests always come
+  # from the same ref (see bin/setup-native.sh). This is purely informative:
+  # continue-on-error is set on the test step itself and this job is NOT in
+  # ci-result's `needs`, so a nightly failure never blocks a PR or release.
+  nightly_matrix:
+    name: "nightly (non-blocking) / matrix"
+    needs: changes
+    if: ${{ needs.changes.outputs.plugins != '[]' }}
+    runs-on: ubuntu-latest
+    outputs:
+      include: ${{ steps.build.outputs.include }}
+    steps:
+      - name: Checkout harness (direct trigger)
+        if: ${{ inputs.plugin == '' }}
+        uses: actions/checkout@v4
+
+      - name: Checkout harness (reusable call)
+        if: ${{ inputs.plugin != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: Miller-Media/wordpress-plugin-tests
+          ref: ${{ inputs.harness_ref }}
+          ssh-key: ${{ secrets.HARNESS_DEPLOY_KEY }}
+
+      - name: Build nightly matrix
+        id: build
+        run: |
+          set -euo pipefail
+
+          PLUGINS='${{ needs.changes.outputs.plugins }}'
+          SLUGS=$(php -r '$p = json_decode($argv[1], true); echo implode(",", $p);' "$PLUGINS")
+
+          if [ -z "$SLUGS" ]; then
+            echo "include=[]" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          MATRIX=$(php bin/manifest.php nightly-matrix --plugins="$SLUGS" | php -r '
+            $rows = json_decode(stream_get_contents(STDIN), true);
+            $manifest = json_decode(file_get_contents("plugins.json"), true);
+            $by_slug = array();
+            foreach ($manifest["plugins"] as $p) { $by_slug[$p["slug"]] = $p; }
+            foreach ($rows as &$r) {
+              $r["dir"]         = $by_slug[$r["slug"]]["dir"];
+              $r["repo"]        = $by_slug[$r["slug"]]["repo"];
+              $r["install_dir"] = $by_slug[$r["slug"]]["install_dir"];
+            }
+            echo json_encode($rows);
+          ')
+          echo "Nightly matrix: $MATRIX"
+          echo "include=$MATRIX" >> "$GITHUB_OUTPUT"
+
+  nightly:
+    name: "nightly (non-blocking) (${{ matrix.slug }}, wp ${{ matrix.wp }}${{ matrix.with_wc && ' +WC' || '' }})"
+    needs: nightly_matrix
+    if: ${{ needs.nightly_matrix.outputs.include != '[]' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.nightly_matrix.outputs.include) }}
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: yes
+          MYSQL_DATABASE: wordpress_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+
+    steps:
+      - name: Checkout harness (direct trigger)
+        if: ${{ inputs.plugin == '' }}
+        uses: actions/checkout@v4
+        with:
+          path: harness
+
+      - name: Checkout harness (reusable call)
+        if: ${{ inputs.plugin != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: Miller-Media/wordpress-plugin-tests
+          ref: ${{ inputs.harness_ref }}
+          ssh-key: ${{ secrets.HARNESS_DEPLOY_KEY }}
+          path: harness
+
+      - name: Checkout plugin under test (caller's own repo)
+        if: ${{ matrix.slug == inputs.plugin }}
+        uses: actions/checkout@v4
+        with:
+          path: harness/${{ matrix.dir }}
+
+      - name: Checkout plugin under test (cross-repo)
+        if: ${{ matrix.slug != inputs.plugin }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.repo }}
+          path: harness/${{ matrix.dir }}
+
+      - name: Set up PHP ${{ matrix.php }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: mysqli, mbstring, zip, gd, xml
+          tools: composer, wp-cli
+
+      - name: Install dev tooling (pinned versions)
+        run: |
+          composer global config allow-plugins.dealerdirect/phpcodesniffer-composer-installer true
+          composer global require --dev yoast/phpunit-polyfills:2.0.5 phpunit/phpunit:^9.6
+          echo "COMPOSER_HOME=$(composer config -g home)" >> "$GITHUB_ENV"
+
+      - name: Verify PHPUnit version
+        run: |
+          "${COMPOSER_HOME}/vendor/bin/phpunit" --version
+          "${COMPOSER_HOME}/vendor/bin/phpunit" --version | grep -q 'PHPUnit 9\.' || { echo "::error::Expected PHPUnit 9.x, got a different version"; exit 1; }
+
+      - name: Install Subversion
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq subversion
+
+      - name: Set up native WP nightly environment
+        working-directory: harness
+        continue-on-error: true
+        run: |
+          bin/setup-native.sh "${{ matrix.wp }}" \
+            --core-dir="${RUNNER_TEMP}/wp-core" \
+            --tests-dir="${RUNNER_TEMP}/wp-tests-lib" \
+            --db-host=127.0.0.1 --db-user=root --db-pass= --db-name=wordpress_test \
+            ${{ matrix.wc == null && '--skip-woocommerce' || '' }}
+
+      - name: Run PHPUnit against nightly/beta WordPress (non-blocking)
+        continue-on-error: true
+        working-directory: harness
+        env:
+          WP_CORE_DIR: ${{ runner.temp }}/wp-core
+          WP_TESTS_DIR: ${{ runner.temp }}/wp-tests-lib
+          WP_TESTS_DB_HOST: 127.0.0.1
+          WP_TESTS_DB_NAME: wordpress_test
+          WP_TESTS_DB_USER: root
+          WP_TESTS_DB_PASS: ''
+          WP_TESTS_PHPUNIT_POLYFILLS_PATH: ${{ env.COMPOSER_HOME }}/vendor/yoast/phpunit-polyfills
+          MM_TESTS_PLUGIN: ${{ matrix.slug }}
+          MM_TESTS_WITH_WC: ${{ matrix.with_wc && '1' || '' }}
+        run: make test-plugin-native PLUGIN=${{ matrix.slug }}
+
+  # ── Single required check: configure branch protection on this ──
+  # (plugin-check's own job-level continue-on-error already makes its
+  # result read as "success" for wporg:false plugins — see that job.)
+  ci-result:
+    name: ci-result
+    if: always()
+    needs: [changes, matrix, test, plugin_check_matrix, plugin-check]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate required jobs
+        run: |
+          echo "changes:             ${{ needs.changes.result }}"
+          echo "matrix:              ${{ needs.matrix.result }}"
+          echo "test:                ${{ needs.test.result }}"
+          echo "plugin_check_matrix: ${{ needs.plugin_check_matrix.result }}"
+          echo "plugin-check:        ${{ needs['plugin-check'].result }}"
+
+          if [ "${{ needs.changes.result }}" != "success" ]; then
+            echo "::error::changes job did not succeed"
+            exit 1
+          fi
+          if [ "${{ needs.matrix.result }}" != "success" ] && [ "${{ needs.matrix.result }}" != "skipped" ]; then
+            echo "::error::matrix job did not succeed"
+            exit 1
+          fi
+          if [ "${{ needs.test.result }}" == "failure" ] || [ "${{ needs.test.result }}" == "cancelled" ]; then
+            echo "::error::test job failed"
+            exit 1
+          fi
+          if [ "${{ needs.plugin_check_matrix.result }}" != "success" ] && [ "${{ needs.plugin_check_matrix.result }}" != "skipped" ]; then
+            echo "::error::plugin_check_matrix job did not succeed"
+            exit 1
+          fi
+          if [ "${{ needs['plugin-check'].result }}" == "failure" ] || [ "${{ needs['plugin-check'].result }}" == "cancelled" ]; then
+            echo "::error::plugin-check job failed"
+            exit 1
+          fi
+          echo "All required jobs passed (or had nothing to do)."

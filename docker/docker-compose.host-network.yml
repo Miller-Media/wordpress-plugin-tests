@@ -1,0 +1,27 @@
+# Override for boxes where Docker's bridge/user-defined networks can't
+# reach the DB container or the internet, but host networking works fine.
+# Apply on top of docker-compose.yml (+ docker-compose.plugins.yml) with
+# `make start-host-network` / `make compose-host-network` — see CLAUDE.md
+# "Docker host networking".
+#
+# All three services join the host's network namespace directly instead of
+# Compose's implicit default network. That means cross-container hostnames
+# ("db", "db-test") stop resolving — everything talks over 127.0.0.1
+# instead, on ports chosen not to collide with a MySQL that may already be
+# listening on the host's default 3306. (`ports:` from the base file is
+# harmless to leave as-is here — Docker just ignores published-port mapping
+# under host networking rather than rejecting it.)
+services:
+  wordpress:
+    network_mode: host
+    environment:
+      WORDPRESS_DB_HOST: 127.0.0.1:3307
+      WP_TESTS_DB_HOST: 127.0.0.1:3308
+
+  db:
+    network_mode: host
+    command: ["--port=3307"]
+
+  db-test:
+    network_mode: host
+    command: ["--port=3308"]

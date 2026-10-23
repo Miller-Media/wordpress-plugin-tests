@@ -1,6 +1,11 @@
 #!/bin/bash
 set -e
 
+# Note: this script only installs WordPress core (via the stock entrypoint)
+# and activates plugins — it never touches the PHPUnit test library. That's
+# resolved separately by tests/bootstrap.php to match whatever core version
+# ends up installed here (see the Dockerfile's WP_VERSION comment).
+
 # Run the default WordPress entrypoint first
 docker-entrypoint.sh apache2-foreground &
 WP_PID=$!
@@ -34,14 +39,11 @@ else
     wp plugin activate woocommerce --path=/var/www/html --allow-root 2>/dev/null || true
 fi
 
-# Activate all custom plugins
+# Activate every plugin in the manifest (no hardcoded list — see plugins.json)
 echo "Activating custom plugins..."
-wp plugin activate ip-blacklist-for-cloudflare --path=/var/www/html --allow-root 2>/dev/null || true
-wp plugin activate edit-usernames --path=/var/www/html --allow-root 2>/dev/null || true
-wp plugin activate expire-user-passwords --path=/var/www/html --allow-root 2>/dev/null || true
-wp plugin activate protect-the-children --path=/var/www/html --allow-root 2>/dev/null || true
-wp plugin activate send-emails-with-mandrill --path=/var/www/html --allow-root 2>/dev/null || true
-wp plugin activate wooflare --path=/var/www/html --allow-root 2>/dev/null || true
+for install_dir in $(php /var/www/bin/manifest.php install-dirs); do
+    wp plugin activate "$install_dir" --path=/var/www/html --allow-root 2>/dev/null || true
+done
 
 echo "All plugins activated."
 

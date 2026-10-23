@@ -1,0 +1,31 @@
+# Copy into a plugin repo's root as .distignore. Read by both
+# 10up/action-wordpress-plugin-deploy (release.yml) and the manual SVN
+# fallback in CLAUDE.md — keep the two in sync.
+#
+# Uncomment README.md only if the plugin also ships a readme.txt (wp.org
+# reads readme.txt, not README.md). Uncomment src only for plugins that
+# ship built JS/CSS from src/ -> build/ (don't ship the source twice).
+
+.git
+.github
+.gitignore
+.gitattributes
+.distignore
+.wordpress-org
+CLAUDE.md
+# README.md
+readme.md
+svn-url
+tests
+phpcs.xml*
+phpunit.xml*
+composer.json
+composer.lock
+package.json
+package-lock.json
+node_modules
+# src
+*.map
+.DS_Store
+.idea
+.vscode

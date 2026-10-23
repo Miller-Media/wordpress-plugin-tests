@@ -12,6 +12,6 @@ class PTC_ActivationTest extends PluginTestCase {
 	public function test_constants_defined() {
 		$this->assertTrue( defined( 'PTC_PLUGIN_PATH' ) );
 		$this->assertTrue( defined( 'PROTECT_THE_CHILDREN_PLUGIN_VERSION' ) );
-		$this->assertEquals( '1.4.0', PROTECT_THE_CHILDREN_PLUGIN_VERSION );
+		$this->assertEquals( $this->plugin_version( 'protect-the-children' ), PROTECT_THE_CHILDREN_PLUGIN_VERSION );
 	}
 }

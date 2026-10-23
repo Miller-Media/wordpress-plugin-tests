@@ -1,0 +1,30 @@
+# Copy into a plugin repo as .github/workflows/release.yml, replacing
+# <slug> with that plugin's manifest slug. Triggers on pushing a `vX.Y.Z`
+# tag (create the tag only after bumping Version/Stable tag + changelog
+# and merging — see CLAUDE.md "Releasing a Plugin"), or manually via
+# workflow_dispatch with dry_run=true to rehearse a release without
+# touching SVN.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run everything except the actual SVN commit.'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    uses: Miller-Media/wordpress-plugin-tests/.github/workflows/release.yml@main
+    with:
+      plugin: <slug>
+      dry_run: ${{ inputs.dry_run || false }}
+    secrets: inherit

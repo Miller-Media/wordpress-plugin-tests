@@ -1,0 +1,2 @@
+post_title,post_content,post_status,post_type,custom_field
+"Harness Test Post","This is test content.","publish","post","hello-world"

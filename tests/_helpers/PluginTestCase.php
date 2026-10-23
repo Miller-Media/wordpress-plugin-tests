@@ -13,6 +13,16 @@ class PluginTestCase extends WP_UnitTestCase {
 	public function setUp(): void {
 		parent::setUp();
 
+		// get_plugin_data() lives in wp-admin/includes/plugin.php, which core
+		// only auto-loads unconditionally as of WP 6.9 (#62244) — on the
+		// harness's older CI legs (e.g. the wp_ci_floor matrix row) it's only
+		// available in wp-admin requests otherwise, so tests that call it
+		// (e.g. reading a plugin's live Version header) need it required
+		// explicitly here rather than assuming it's always defined.
+		if ( ! function_exists( 'get_plugin_data' ) ) {
+			require_once ABSPATH . 'wp-admin/includes/plugin.php';
+		}
+
 		// Reset API mocks before each test
 		CloudflareAPIMock::reset();
 		MandrillAPIMock::reset();
@@ -87,6 +97,18 @@ class PluginTestCase extends WP_UnitTestCase {
 	 */
 	protected function set_site_option( $option_name, $value ) {
 		update_site_option( $option_name, $value );
+	}
+
+	/**
+	 * Get the real version of a plugin, as declared in its own main file
+	 * header — read live from disk rather than hardcoded, so tests never
+	 * drift out of sync with the plugin being tested.
+	 *
+	 * @param string $slug Manifest slug (see plugins.json).
+	 * @return string|null
+	 */
+	protected function plugin_version( $slug ) {
+		return mm_tests_plugin_header_version( mm_tests_load_manifest(), WP_PLUGIN_DIR, $slug );
 	}
 
 	/**
