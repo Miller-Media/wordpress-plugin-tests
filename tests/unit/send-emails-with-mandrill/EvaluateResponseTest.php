@@ -30,7 +30,11 @@ class SEWM_EvaluateResponseTest extends PluginTestCase {
 		$this->assertTrue( $result );
 	}
 
-	public function test_evaluate_response_rejected_throws_exception() {
+	public function test_evaluate_response_soft_bounce_does_not_throw() {
+		// 'soft-bounce' is a recipient-level rejection (tied to the suppressed
+		// address), so as of the suppressed-recipients fix it must NOT fall
+		// back to the native mailer: evaluate_response() reports failure
+		// honestly (false) instead of throwing.
 		$response = array(
 			array(
 				'email'         => 'test@example.com',
@@ -40,11 +44,14 @@ class SEWM_EvaluateResponseTest extends PluginTestCase {
 			),
 		);
 
-		$this->expectException( Exception::class );
-		wpMandrill::evaluate_response( $response );
+		$result = wpMandrill::evaluate_response( $response );
+		$this->assertFalse( $result );
 	}
 
 	public function test_evaluate_response_hard_bounce_does_not_throw() {
+		// Same reasoning as the soft-bounce case above: 'hard-bounce' is
+		// recipient-level, so it must not throw (and therefore must not
+		// trigger the native-mailer fallback).
 		$response = array(
 			array(
 				'email'         => 'test@example.com',
@@ -54,9 +61,23 @@ class SEWM_EvaluateResponseTest extends PluginTestCase {
 			),
 		);
 
-		// Hard bounces are excluded from the rejection exception,
-		// but the status is still not 'sent' or 'queued' so it throws
-		// for a different reason.
+		$result = wpMandrill::evaluate_response( $response );
+		$this->assertFalse( $result );
+	}
+
+	public function test_evaluate_response_invalid_sender_throws_exception() {
+		// 'invalid-sender' is a message/account-level failure (not tied to
+		// the recipient's address), so it must still throw so that
+		// send_mail() falls back to the native mailer.
+		$response = array(
+			array(
+				'email'         => 'test@example.com',
+				'status'        => 'rejected',
+				'reject_reason' => 'invalid-sender',
+				'_id'           => 'msg_006',
+			),
+		);
+
 		$this->expectException( Exception::class );
 		wpMandrill::evaluate_response( $response );
 	}
