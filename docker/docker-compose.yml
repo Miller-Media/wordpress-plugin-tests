@@ -3,6 +3,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        PHP_VERSION: ${PHP_VERSION:-8.2}
+        WP_VERSION: ${WP_VERSION:-7.1}
     ports:
       - "8080:80"
     environment:
@@ -11,18 +14,17 @@ services:
       WORDPRESS_DB_PASSWORD: wordpress
       WORDPRESS_DB_NAME: wordpress
       WORDPRESS_DEBUG: 1
+    # Per-plugin mounts live in docker/docker-compose.plugins.yml, generated
+    # from plugins.json by `make compose` (run automatically by `make start`).
     volumes:
-      # Mount plugins into wp-content/plugins
-      - ../cloudflare-ip-blacklist:/var/www/html/wp-content/plugins/ip-blacklist-for-cloudflare
-      - ../edit-usernames:/var/www/html/wp-content/plugins/edit-usernames
-      - ../expire-passwords:/var/www/html/wp-content/plugins/expire-user-passwords
-      - ../protect-the-children:/var/www/html/wp-content/plugins/protect-the-children
-      - ../send-emails-with-mandrill:/var/www/html/wp-content/plugins/send-emails-with-mandrill
-      - ../wooflare:/var/www/html/wp-content/plugins/wooflare
       # Mount tests directory
       - ../tests:/var/www/tests
       # Mount phpcs config
       - ../phpcs.xml:/var/www/phpcs.xml
+      # Mount the manifest + CLI so the entrypoint can activate plugins
+      # without a hardcoded list (see docker-entrypoint-custom.sh)
+      - ../plugins.json:/var/www/plugins.json
+      - ../bin:/var/www/bin
     depends_on:
       db:
         condition: service_healthy

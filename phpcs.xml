@@ -43,13 +43,15 @@
 	<rule ref="WordPress.WP.I18n">
 		<properties>
 			<property name="text_domain" type="array">
-				<element value="cloudflare-ip-blacklist"/>
+				<element value="ip-blacklist-for-cloudflare"/>
 				<element value="edit-usernames"/>
 				<element value="expire-user-passwords"/>
 				<element value="protect-the-children"/>
-				<element value="wpmandrill"/>
 				<element value="send-emails-with-mandrill"/>
 				<element value="wooflare"/>
+				<element value="one-off-emails-for-woocommerce"/>
+				<element value="miller-media-server-file-import"/>
+				<element value="miller-media-csv-importer"/>
 			</property>
 		</properties>
 	</rule>

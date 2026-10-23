@@ -1,4 +1,10 @@
-FROM wordpress:6.9.1-php8.2
+# PHP_VERSION / WP_VERSION default to plugins.json defaults.php_runtime /
+# defaults.wp_latest_tested — override with --build-arg or the Makefile's
+# PHP_VERSION / WP_VERSION env vars (see `make compose`, `make start`).
+ARG WP_VERSION=7.1
+ARG PHP_VERSION=8.2
+
+FROM wordpress:${WP_VERSION}-php${PHP_VERSION}
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -12,22 +18,23 @@ RUN apt-get update && apt-get install -y \
 # Install Composer
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
-# Install WP-CLI
-RUN curl -o /usr/local/bin/wp https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar \
+# Install WP-CLI (pinned)
+ARG WP_CLI_VERSION=2.11.0
+RUN curl -L -o /usr/local/bin/wp "https://github.com/wp-cli/wp-cli/releases/download/v${WP_CLI_VERSION}/wp-cli-${WP_CLI_VERSION}.phar" \
     && chmod +x /usr/local/bin/wp
 
-# Install PHPUnit 9
-RUN curl -L -o /usr/local/bin/phpunit https://phar.phpunit.de/phpunit-9.phar \
+# Install PHPUnit (pinned to the 9.6 line used by yoast/phpunit-polyfills 2.0.5)
+RUN curl -L -o /usr/local/bin/phpunit https://phar.phpunit.de/phpunit-9.6.phar \
     && chmod +x /usr/local/bin/phpunit
 
-# Install PHPCS, WordPress Coding Standards, and PHPUnit Polyfills
+# Install PHPCS, WordPress Coding Standards, and PHPUnit Polyfills (pinned exact versions)
 RUN composer global config allow-plugins.dealerdirect/phpcodesniffer-composer-installer true \
     && composer global require --dev \
-    "squizlabs/php_codesniffer=*" \
-    "wp-coding-standards/wpcs=*" \
-    "phpcompatibility/phpcompatibility-wp=*" \
-    "dealerdirect/phpcodesniffer-composer-installer=*" \
-    "yoast/phpunit-polyfills=*" \
+    "squizlabs/php_codesniffer:3.13.6" \
+    "wp-coding-standards/wpcs:3.4.1" \
+    "phpcompatibility/phpcompatibility-wp:2.1.8" \
+    "dealerdirect/phpcodesniffer-composer-installer:1.2.1" \
+    "yoast/phpunit-polyfills:2.0.5" \
     && ln -s /root/.composer/vendor/bin/phpcs /usr/local/bin/phpcs \
     && ln -s /root/.composer/vendor/bin/phpcbf /usr/local/bin/phpcbf
 
