@@ -230,6 +230,9 @@ jobs:
           chmod +x /usr/local/bin/phpunit
           echo "COMPOSER_HOME=$(composer config -g home)" >> "$GITHUB_ENV"
 
+      - name: Install Subversion
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq subversion
+
       - name: Set up native WP ${{ matrix.wp }} environment
         working-directory: harness
         run: |
@@ -353,19 +356,20 @@ jobs:
         if: ${{ matrix.slug == inputs.plugin }}
         uses: actions/checkout@v4
         with:
-          path: plugin
+          path: ${{ matrix.install_dir }}
 
       - name: Checkout plugin under test (cross-repo)
         if: ${{ matrix.slug != inputs.plugin }}
         uses: actions/checkout@v4
         with:
           repository: ${{ matrix.repo }}
-          path: plugin
+          path: ${{ matrix.install_dir }}
 
       - name: WordPress Plugin Check
         uses: wordpress/plugin-check-action@v1
         with:
-          build-dir: './plugin'
+          build-dir: './${{ matrix.install_dir }}'
+          slug: ${{ matrix.install_dir }}
           exclude-directories: '.github,tests,node_modules,vendor'
           ignore-warnings: true
 
@@ -489,6 +493,9 @@ jobs:
           curl -L -o /usr/local/bin/phpunit https://phar.phpunit.de/phpunit-9.6.phar
           chmod +x /usr/local/bin/phpunit
           echo "COMPOSER_HOME=$(composer config -g home)" >> "$GITHUB_ENV"
+
+      - name: Install Subversion
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq subversion
 
       - name: Set up native WP nightly environment
         working-directory: harness
