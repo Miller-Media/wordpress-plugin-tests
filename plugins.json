@@ -17,7 +17,7 @@
       "install_dir": "ip-blacklist-for-cloudflare",
       "main_file": "ip-blacklist-for-cloudflare.php",
       "version_constant": "CFIP_PLUGIN_VERSION",
-      "text_domains": ["ip-blacklist-for-cloudflare"],
+      "text_domains": ["ip-blacklist-cloudflare"],
       "requires_php": "8.1",
       "requires_wp": null,
       "wc": null,

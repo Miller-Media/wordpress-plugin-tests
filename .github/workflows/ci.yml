@@ -225,10 +225,14 @@ jobs:
             wp-coding-standards/wpcs:3.4.1 \
             phpcompatibility/phpcompatibility-wp:2.1.8 \
             dealerdirect/phpcodesniffer-composer-installer:1.2.1 \
-            yoast/phpunit-polyfills:2.0.5
-          curl -L -o /usr/local/bin/phpunit https://phar.phpunit.de/phpunit-9.6.phar
-          chmod +x /usr/local/bin/phpunit
+            yoast/phpunit-polyfills:2.0.5 \
+            phpunit/phpunit:^9.6
           echo "COMPOSER_HOME=$(composer config -g home)" >> "$GITHUB_ENV"
+
+      - name: Verify PHPUnit version
+        run: |
+          "${COMPOSER_HOME}/vendor/bin/phpunit" --version
+          "${COMPOSER_HOME}/vendor/bin/phpunit" --version | grep -q 'PHPUnit 9\.' || { echo "::error::Expected PHPUnit 9.x, got a different version"; exit 1; }
 
       - name: Install Subversion
         run: sudo apt-get update -qq && sudo apt-get install -y -qq subversion
@@ -328,6 +332,7 @@ jobs:
                 "dir"         => $p["dir"],
                 "repo"        => $p["repo"],
                 "install_dir" => $p["install_dir"],
+                "check_slug"  => $p["svn_slug"] !== null ? $p["svn_slug"] : $p["install_dir"],
                 "wporg"       => $p["wporg"],
               );
             }
@@ -346,7 +351,6 @@ jobs:
     needs: plugin_check_matrix
     if: ${{ github.event_name != 'schedule' && needs.plugin_check_matrix.outputs.include != '[]' }}
     runs-on: ubuntu-latest
-    continue-on-error: ${{ matrix.wporg == false }}
     strategy:
       fail-fast: false
       matrix:
@@ -356,20 +360,23 @@ jobs:
         if: ${{ matrix.slug == inputs.plugin }}
         uses: actions/checkout@v4
         with:
-          path: ${{ matrix.install_dir }}
+          path: ${{ matrix.check_slug }}
 
       - name: Checkout plugin under test (cross-repo)
         if: ${{ matrix.slug != inputs.plugin }}
         uses: actions/checkout@v4
         with:
           repository: ${{ matrix.repo }}
-          path: ${{ matrix.install_dir }}
+          path: ${{ matrix.check_slug }}
 
       - name: WordPress Plugin Check
+        # Non-blocking for non-wp.org plugins and for the harness's own runs
+        # (plugin code issues are enforced in each plugin repo's ci / ci-result).
+        continue-on-error: ${{ matrix.wporg == false || inputs.plugin == '' }}
         uses: wordpress/plugin-check-action@v1
         with:
-          build-dir: './${{ matrix.install_dir }}'
-          slug: ${{ matrix.install_dir }}
+          build-dir: './${{ matrix.check_slug }}'
+          slug: ${{ matrix.check_slug }}
           exclude-directories: '.github,tests,node_modules,vendor'
           ignore-warnings: true
 
@@ -489,10 +496,13 @@ jobs:
       - name: Install dev tooling (pinned versions)
         run: |
           composer global config allow-plugins.dealerdirect/phpcodesniffer-composer-installer true
-          composer global require --dev yoast/phpunit-polyfills:2.0.5
-          curl -L -o /usr/local/bin/phpunit https://phar.phpunit.de/phpunit-9.6.phar
-          chmod +x /usr/local/bin/phpunit
+          composer global require --dev yoast/phpunit-polyfills:2.0.5 phpunit/phpunit:^9.6
           echo "COMPOSER_HOME=$(composer config -g home)" >> "$GITHUB_ENV"
+
+      - name: Verify PHPUnit version
+        run: |
+          "${COMPOSER_HOME}/vendor/bin/phpunit" --version
+          "${COMPOSER_HOME}/vendor/bin/phpunit" --version | grep -q 'PHPUnit 9\.' || { echo "::error::Expected PHPUnit 9.x, got a different version"; exit 1; }
 
       - name: Install Subversion
         run: sudo apt-get update -qq && sudo apt-get install -y -qq subversion

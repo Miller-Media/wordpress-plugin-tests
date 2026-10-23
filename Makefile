@@ -53,7 +53,13 @@ WP_TESTS_DB_USER ?= wordpress
 WP_TESTS_DB_PASS ?= wordpress
 WP_TESTS_PHPUNIT_POLYFILLS_PATH ?= /opt/wp-tools/vendor/yoast/phpunit-polyfills
 PHPCS_BIN ?= phpcs
-PHPUNIT_BIN ?= phpunit
+# Composer's global vendor/bin can shadow the system phpunit on PATH (e.g. a
+# `composer global require` pulling in PHPUnit 10 as a dependency of some
+# other dev tool). Prefer the composer-managed phpunit only when it's
+# actually the pinned 9.x the WP test suite needs; otherwise fall back to
+# whatever `phpunit` resolves to on PATH.
+COMPOSER_HOME ?= /root/.composer
+PHPUNIT_BIN ?= $(shell phpunit_bin="$(COMPOSER_HOME)/vendor/bin/phpunit"; if [ -x "$$phpunit_bin" ] && "$$phpunit_bin" --version 2>/dev/null | grep -q 'PHPUnit 9\.'; then echo "$$phpunit_bin"; else echo phpunit; fi)
 export WP_TESTS_DIR WP_CORE_DIR WP_TESTS_DB_HOST WP_TESTS_DB_NAME WP_TESTS_DB_USER WP_TESTS_DB_PASS WP_TESTS_PHPUNIT_POLYFILLS_PATH
 
 # The native test targets do NOT inherit the Docker-oriented WP_VERSION
