@@ -9,7 +9,16 @@ updates:
       github-actions:
         patterns:
           - '*'
-  - package-ecosystem: 'composer'
-    directory: '/'
-    schedule:
-      interval: 'weekly'
+
+  # Uncomment only if this plugin has its own composer.json (none do today):
+  # - package-ecosystem: 'composer'
+  #   directory: '/'
+  #   schedule:
+  #     interval: 'weekly'
+
+  # protect-the-children has a package.json — uncomment there (and nowhere
+  # else, since no other plugin ships JS tooling):
+  # - package-ecosystem: 'npm'
+  #   directory: '/'
+  #   schedule:
+  #     interval: 'weekly'
