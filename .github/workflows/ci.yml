@@ -56,13 +56,13 @@ jobs:
     steps:
       - name: Checkout harness (direct trigger)
         if: ${{ inputs.plugin == '' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Checkout harness (reusable call)
         if: ${{ inputs.plugin != '' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: Miller-Media/wordpress-plugin-tests
           ref: ${{ inputs.harness_ref }}
@@ -116,11 +116,11 @@ jobs:
     steps:
       - name: Checkout harness (direct trigger)
         if: ${{ inputs.plugin == '' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Checkout harness (reusable call)
         if: ${{ inputs.plugin != '' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: Miller-Media/wordpress-plugin-tests
           ref: ${{ inputs.harness_ref }}
@@ -180,13 +180,13 @@ jobs:
     steps:
       - name: Checkout harness (direct trigger)
         if: ${{ inputs.plugin == '' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: harness
 
       - name: Checkout harness (reusable call)
         if: ${{ inputs.plugin != '' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: Miller-Media/wordpress-plugin-tests
           ref: ${{ inputs.harness_ref }}
@@ -199,13 +199,13 @@ jobs:
       # the caller) we check it out explicitly.
       - name: Checkout plugin under test (caller's own repo)
         if: ${{ matrix.slug == inputs.plugin }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: harness/${{ matrix.dir }}
 
       - name: Checkout plugin under test (cross-repo)
         if: ${{ matrix.slug != inputs.plugin }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ matrix.repo }}
           path: harness/${{ matrix.dir }}
@@ -279,7 +279,7 @@ jobs:
 
       - name: Upload PHPCS report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: phpcs-${{ matrix.slug }}-php${{ matrix.php }}-wp${{ matrix.wp }}
           path: ${{ runner.temp }}/phpcs-report/
@@ -302,11 +302,11 @@ jobs:
     steps:
       - name: Checkout harness (direct trigger)
         if: ${{ inputs.plugin == '' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Checkout harness (reusable call)
         if: ${{ inputs.plugin != '' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: Miller-Media/wordpress-plugin-tests
           ref: ${{ inputs.harness_ref }}
@@ -358,13 +358,13 @@ jobs:
     steps:
       - name: Checkout plugin under test (caller's own repo)
         if: ${{ matrix.slug == inputs.plugin }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: ${{ matrix.check_slug }}
 
       - name: Checkout plugin under test (cross-repo)
         if: ${{ matrix.slug != inputs.plugin }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ matrix.repo }}
           path: ${{ matrix.check_slug }}
@@ -398,11 +398,11 @@ jobs:
     steps:
       - name: Checkout harness (direct trigger)
         if: ${{ inputs.plugin == '' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Checkout harness (reusable call)
         if: ${{ inputs.plugin != '' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: Miller-Media/wordpress-plugin-tests
           ref: ${{ inputs.harness_ref }}
@@ -460,13 +460,13 @@ jobs:
     steps:
       - name: Checkout harness (direct trigger)
         if: ${{ inputs.plugin == '' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: harness
 
       - name: Checkout harness (reusable call)
         if: ${{ inputs.plugin != '' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: Miller-Media/wordpress-plugin-tests
           ref: ${{ inputs.harness_ref }}
@@ -475,13 +475,13 @@ jobs:
 
       - name: Checkout plugin under test (caller's own repo)
         if: ${{ matrix.slug == inputs.plugin }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: harness/${{ matrix.dir }}
 
       - name: Checkout plugin under test (cross-repo)
         if: ${{ matrix.slug != inputs.plugin }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ matrix.repo }}
           path: harness/${{ matrix.dir }}
