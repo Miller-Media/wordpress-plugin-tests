@@ -314,15 +314,18 @@ jobs:
 
       - name: Build plugin-check matrix
         id: build
+        env:
+          CALLER_PLUGIN: ${{ inputs.plugin }}
         run: |
           set -euo pipefail
 
           PLUGINS='${{ needs.changes.outputs.plugins }}'
 
           MATRIX=$(php -r '
-            $slugs    = json_decode($argv[1], true);
-            $manifest = json_decode(file_get_contents("plugins.json"), true);
-            $by_slug  = array();
+            $slugs        = json_decode($argv[1], true);
+            $manifest     = json_decode(file_get_contents("plugins.json"), true);
+            $caller       = getenv("CALLER_PLUGIN");
+            $by_slug      = array();
             foreach ($manifest["plugins"] as $p) { $by_slug[$p["slug"]] = $p; }
             $rows = array();
             foreach ($slugs as $slug) {
@@ -334,6 +337,7 @@ jobs:
                 "install_dir" => $p["install_dir"],
                 "check_slug"  => $p["svn_slug"] !== null ? $p["svn_slug"] : $p["install_dir"],
                 "wporg"       => $p["wporg"],
+                "blocking"    => ($caller !== "" && $caller !== false) && $p["wporg"] === true,
               );
             }
             echo json_encode($rows);
@@ -342,10 +346,13 @@ jobs:
           echo "include=$MATRIX" >> "$GITHUB_OUTPUT"
 
   # ── WordPress.org plugin-check — errors block, warnings never do ──
-  # (ignore-warnings: true). Non-blocking (continue-on-error) for the one
-  # manifest plugin with wporg:false (miller-media-csv-importer), since
-  # that plugin is never deployed to SVN and plugin-check's wp.org-centric
-  # rules aren't a meaningful gate for it.
+  # (ignore-warnings: true). Blocking only for wporg:true plugins when this
+  # workflow is invoked as a reusable call from the plugin's own repo
+  # (matrix.blocking, computed in plugin_check_matrix from CALLER_PLUGIN).
+  # Non-blocking (continue-on-error) for the harness's own direct runs and
+  # for the one manifest plugin with wporg:false (miller-media-csv-importer),
+  # since that plugin is never deployed to SVN and plugin-check's
+  # wp.org-centric rules aren't a meaningful gate for it.
   plugin-check:
     name: "CI / plugin-check (${{ matrix.slug }})"
     needs: plugin_check_matrix
@@ -372,13 +379,17 @@ jobs:
       - name: WordPress Plugin Check
         # Non-blocking for non-wp.org plugins and for the harness's own runs
         # (plugin code issues are enforced in each plugin repo's ci / ci-result).
-        continue-on-error: ${{ matrix.wporg == false || inputs.plugin == '' }}
+        continue-on-error: ${{ !matrix.blocking }}
         uses: wordpress/plugin-check-action@v1
         with:
           build-dir: './${{ matrix.check_slug }}'
           slug: ${{ matrix.check_slug }}
           exclude-directories: '.github,tests,node_modules,vendor'
           ignore-warnings: true
+          # GITHUB_TOKEN is read-only here, so the action's PR-comment step
+          # fails with "Resource not accessible by integration"; skip the
+          # comment — annotations + the uploaded artifact still report results.
+          repo-token: ''
 
   # ── Nightly / beta-RC compatibility (non-blocking) ───────────────
   #
