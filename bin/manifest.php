@@ -383,7 +383,7 @@ function cmd_check_headers( $manifest, $root, $only_slug ) {
 		// plugin bumping either never fails this check or needs a matching
 		// plugins.json edit. This just flags when a plugin has fallen
 		// BEHIND what the harness currently tests against, as a nudge for
-		// bump-tested-up-to.yml / a manual bump — never exits non-zero.
+		// a manual bump — never exits non-zero.
 		$tested   = live_tested_up_to( $root, $plugin );
 		$defaults = $manifest['defaults'];
 

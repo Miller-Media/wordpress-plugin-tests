@@ -40,7 +40,7 @@ on:
         default: 'main'
     secrets:
       HARNESS_DEPLOY_KEY:
-        description: 'Deploy key with read access to Miller-Media/wordpress-plugin-tests (and, for harness-triggered runs, the plugin repos). Only required while the harness repo is private — see docs/caller-workflows/README.md.'
+        description: 'Deploy key with read access to Miller-Media/wordpress-plugin-tests (and, for harness-triggered runs, the plugin repos). Only needed if one of those repos is itself private — the harness repo is public, so this is optional otherwise.'
         required: false
 
 permissions:
