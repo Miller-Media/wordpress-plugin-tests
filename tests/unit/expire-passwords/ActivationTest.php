@@ -13,7 +13,14 @@ class ExPass_ActivationTest extends PluginTestCase {
 
 	public function test_constants_defined() {
 		$this->assertTrue( defined( 'EXPIRE_USER_PASSWORDS_VERSION' ) );
-		$this->assertEquals( '1.3.4', EXPIRE_USER_PASSWORDS_VERSION );
+
+		$plugin_data = get_plugin_data(
+			EXPIRE_USER_PASSWORDS_DIR . 'expire-user-passwords.php',
+			false,
+			false
+		);
+
+		$this->assertEquals( $plugin_data['Version'], EXPIRE_USER_PASSWORDS_VERSION );
 	}
 
 	public function test_singleton_returns_same_instance() {
