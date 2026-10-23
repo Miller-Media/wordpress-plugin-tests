@@ -6,12 +6,6 @@
  * itself rather than every email sent during the same request.
  */
 
-if ( ! class_exists( 'WooCommerce' ) ) {
-	// WooCommerce isn't loaded in the test environment; wpMandrill gates the
-	// setting on class_exists( 'WooCommerce' ), so simulate it being active.
-	class WooCommerce {}
-}
-
 class SEWM_WooCommerceNl2brTest extends PluginTestCase {
 
 	public function setUp(): void {
@@ -20,6 +14,10 @@ class SEWM_WooCommerceNl2brTest extends PluginTestCase {
 		delete_option( 'wpmandrill' );
 		wpMandrill::$mandrill                    = null;
 		wpMandrill::$woocommerce_email_subject   = null;
+
+		// WooCommerce isn't loaded in the test environment; wpMandrill gates
+		// the setting on isWooCommerceActive(), so simulate it being active.
+		add_filter( 'wpmandrill_is_woocommerce_active', '__return_true' );
 	}
 
 	public function tearDown(): void {
@@ -27,6 +25,7 @@ class SEWM_WooCommerceNl2brTest extends PluginTestCase {
 		remove_action( 'woocommerce_email_sent', array( 'wpMandrill', 'clearWooCommerceEmail' ), 10 );
 		remove_filter( 'mandrill_nl2br', array( 'wpMandrill', 'disableNl2brForWooCommerce' ), 10 );
 		remove_all_actions( 'woocommerce_email' );
+		remove_filter( 'wpmandrill_is_woocommerce_active', '__return_true' );
 
 		delete_option( 'wpmandrill' );
 		wpMandrill::$mandrill                  = null;
@@ -110,6 +109,16 @@ class SEWM_WooCommerceNl2brTest extends PluginTestCase {
 		wpMandrill::mail( 'to@example.com', $subject, "line1\nline2" );
 
 		$this->assertStringContainsString( '<br', $this->get_last_sent_html() );
+	}
+
+	public function test_woocommerce_not_active_registers_nothing_even_when_setting_enabled() {
+		add_filter( 'wpmandrill_is_woocommerce_active', '__return_false', 20 );
+
+		$this->configure( 1 );
+
+		remove_filter( 'wpmandrill_is_woocommerce_active', '__return_false', 20 );
+
+		$this->assertFalse( has_filter( 'mandrill_nl2br', array( 'wpMandrill', 'disableNl2brForWooCommerce' ) ) );
 	}
 
 	public function test_marker_is_cleared_after_woocommerce_email_sent() {
