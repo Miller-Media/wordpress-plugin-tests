@@ -9,11 +9,18 @@
  *   bin/manifest.php install-dirs                   List wp-content/plugins install dirs
  *   bin/manifest.php slugs                           List manifest slugs
  *   bin/manifest.php wporg-slugs                     List slugs where wporg=true
- *   bin/manifest.php field <slug> <dotted.field>     Print one field (empty line if null)
+ *   bin/manifest.php field <slug> <dotted.field>     Print one field (empty line if null).
+ *                                                      "wc.tested" and "tested_up_to" are
+ *                                                      special-cased to read live from the
+ *                                                      plugin's own readme/header instead of
+ *                                                      plugins.json — see live_tested_up_to().
  *   bin/manifest.php get <slug>                       Print the full JSON entry for a slug
  *   bin/manifest.php default <dotted.field>          Print one top-level default
  *   bin/manifest.php text-domains <slug>             List text domains for a slug
- *   bin/manifest.php matrix [--plugins=a,b] [--trunk] Emit CI matrix JSON
+ *   bin/manifest.php matrix [--plugins=a,b]           Emit CI matrix JSON
+ *   bin/manifest.php nightly-matrix [--plugins=a,b]   Emit nightly-leg matrix JSON
+ *                                                      (single php/wp combo per
+ *                                                      plugin, wp="nightly")
  *   bin/manifest.php affected <path> [<path> ...]    Map changed paths to affected slugs
  *                                                      (reads stdin if given "-")
  *   bin/manifest.php check-headers [slug]             Verify requires_php/requires_wp
@@ -114,10 +121,11 @@ function parse_readme_header( $readme_path ) {
 	$headers  = array();
 
 	foreach ( array(
-		'stable_tag'   => 'Stable tag',
-		'requires_php' => 'Requires PHP',
-		'requires_wp'  => 'Requires at least',
-		'tested_up_to' => 'Tested up to',
+		'stable_tag'    => 'Stable tag',
+		'requires_php'  => 'Requires PHP',
+		'requires_wp'   => 'Requires at least',
+		'tested_up_to'  => 'Tested up to',
+		'wc_tested_up_to' => 'WC tested up to',
 	) as $key => $label ) {
 		if ( preg_match( '/^' . preg_quote( $label, '/' ) . ':\s*(.+)$/mi', $contents, $m ) ) {
 			$headers[ $key ] = trim( $m[1] );
@@ -127,6 +135,36 @@ function parse_readme_header( $readme_path ) {
 	}
 
 	return $headers;
+}
+
+/**
+ * Live "Tested up to" / "WC tested up to" values for a plugin, read
+ * straight from its own readme.txt (and, for WC, its main file header too
+ * — some plugins only declare it there). Nothing here is ever hand-edited
+ * in plugins.json: this is the single source of truth, so a plugin bumping
+ * its own header never needs a matching manifest edit and never fails a
+ * harness check because of it (see cmd_check_headers()'s advisory warning).
+ *
+ * @return array{wp: string|null, wc: string|null}
+ */
+function live_tested_up_to( $root, $plugin ) {
+	$readme_path = $root . '/' . $plugin['dir'] . '/readme.txt';
+	$main_path   = $root . '/' . $plugin['dir'] . '/' . $plugin['main_file'];
+
+	$readme = parse_readme_header( $readme_path );
+
+	$wc = $readme['wc_tested_up_to'] ?? null;
+	if ( null === $wc && file_exists( $main_path ) ) {
+		$main_contents = file_get_contents( $main_path, false, null, 0, 8192 );
+		if ( preg_match( '/^[ \t\/*#@]*WC tested up to:\s*(.+)$/mi', $main_contents, $m ) ) {
+			$wc = trim( $m[1] );
+		}
+	}
+
+	return array(
+		'wp' => $readme['tested_up_to'] ?? null,
+		'wc' => $wc,
+	);
 }
 
 function version_max( $a, $b ) {
@@ -139,7 +177,7 @@ function version_max( $a, $b ) {
 	return version_compare( $a, $b, '>=' ) ? $a : $b;
 }
 
-function build_matrix( $manifest, $slugs, $include_trunk ) {
+function build_matrix( $manifest, $slugs ) {
 	$defaults = $manifest['defaults'];
 	$rows     = array();
 
@@ -153,24 +191,73 @@ function build_matrix( $manifest, $slugs, $include_trunk ) {
 			$defaults['php_latest'],
 		) ) ) );
 
-		$wp_floor = version_max( $plugin['requires_wp'], $defaults['wp_ci_floor'] );
+		$wp_floor    = version_max( $plugin['requires_wp'], $defaults['wp_ci_floor'] );
 		$wp_versions = array( $wp_floor, 'latest' );
-		if ( $include_trunk ) {
-			$wp_versions[] = 'trunk';
-		}
 
 		$needs_wc = in_array( 'woocommerce', $plugin['dependencies'], true );
 
 		foreach ( $php_versions as $php ) {
 			foreach ( $wp_versions as $wp ) {
 				$rows[] = array(
-					'slug'          => $plugin['slug'],
-					'php'           => $php,
-					'wp'            => $wp,
-					'wc'            => $needs_wc ? $defaults['wc_latest_tested'] : null,
-					'allow_failure' => ( 'trunk' === $wp ),
+					'slug'    => $plugin['slug'],
+					'php'     => $php,
+					'wp'      => $wp,
+					'wc'      => $needs_wc ? $defaults['wc_latest_tested'] : null,
+					'with_wc' => false,
 				);
 			}
+		}
+
+		// A plugin that doesn't require WooCommerce can still opt into one
+		// extra leg that activates it (e.g. send-emails-with-mandrill's
+		// #152 regression was triggered by WooCommerce being active).
+		if ( ! $needs_wc && ! empty( $plugin['wc_optional_leg'] ) ) {
+			$rows[] = array(
+				'slug'    => $plugin['slug'],
+				'php'     => $defaults['php_latest'],
+				'wp'      => 'latest',
+				'wc'      => $defaults['wc_latest_tested'],
+				'with_wc' => true,
+			);
+		}
+	}
+
+	return $rows;
+}
+
+/**
+ * Nightly leg: one (php_latest, wp=nightly) row per plugin, plus the same
+ * wc_optional_leg extra row as build_matrix() — kept intentionally small
+ * (no requires_php/wp_floor legs) since this runs non-blocking, continuously,
+ * against a moving target (trunk or the latest beta/RC).
+ */
+function build_nightly_matrix( $manifest, $slugs ) {
+	$defaults = $manifest['defaults'];
+	$rows     = array();
+
+	foreach ( $manifest['plugins'] as $plugin ) {
+		if ( ! in_array( $plugin['slug'], $slugs, true ) ) {
+			continue;
+		}
+
+		$needs_wc = in_array( 'woocommerce', $plugin['dependencies'], true );
+
+		$rows[] = array(
+			'slug'    => $plugin['slug'],
+			'php'     => $defaults['php_latest'],
+			'wp'      => 'nightly',
+			'wc'      => $needs_wc ? $defaults['wc_latest_tested'] : null,
+			'with_wc' => false,
+		);
+
+		if ( ! $needs_wc && ! empty( $plugin['wc_optional_leg'] ) ) {
+			$rows[] = array(
+				'slug'    => $plugin['slug'],
+				'php'     => $defaults['php_latest'],
+				'wp'      => 'nightly',
+				'wc'      => $defaults['wc_latest_tested'],
+				'with_wc' => true,
+			);
 		}
 	}
 
@@ -265,6 +352,24 @@ function cmd_check_headers( $manifest, $root, $only_slug ) {
 			) );
 			$failed = true;
 		}
+
+		// Advisory only — "Tested up to" / "WC tested up to" live entirely
+		// in the plugin's own readme/header (see live_tested_up_to()), so a
+		// plugin bumping either never fails this check or needs a matching
+		// plugins.json edit. This just flags when a plugin has fallen
+		// BEHIND what the harness currently tests against, as a nudge for
+		// bump-tested-up-to.yml / a manual bump — never exits non-zero.
+		$tested   = live_tested_up_to( $root, $plugin );
+		$defaults = $manifest['defaults'];
+
+		if ( null !== $tested['wp'] && version_compare( $tested['wp'], $defaults['wp_latest_tested'], '<' ) ) {
+			echo "NOTE [{$plugin['slug']}]: readme 'Tested up to' ({$tested['wp']}) is behind the harness's wp_latest_tested ({$defaults['wp_latest_tested']}).\n";
+		}
+
+		if ( in_array( 'woocommerce', $plugin['dependencies'], true ) && null !== $tested['wc']
+			&& version_compare( $tested['wc'], $defaults['wc_latest_tested'], '<' ) ) {
+			echo "NOTE [{$plugin['slug']}]: 'WC tested up to' ({$tested['wc']}) is behind the harness's wc_latest_tested ({$defaults['wc_latest_tested']}).\n";
+		}
 	}
 
 	if ( $failed ) {
@@ -318,7 +423,15 @@ switch ( $command ) {
 			fwrite( STDERR, "Unknown plugin slug: {$slug}\n" );
 			exit( 1 );
 		}
-		print_scalar( dotted_get( $plugin, $field ) );
+		// "wc.tested" / "tested_up_to" are never hand-maintained in
+		// plugins.json (see live_tested_up_to()) — read live instead.
+		if ( 'wc.tested' === $field ) {
+			print_scalar( live_tested_up_to( $root, $plugin )['wc'] );
+		} elseif ( 'tested_up_to' === $field ) {
+			print_scalar( live_tested_up_to( $root, $plugin )['wp'] );
+		} else {
+			print_scalar( dotted_get( $plugin, $field ) );
+		}
 		break;
 
 	case 'default':
@@ -359,16 +472,23 @@ switch ( $command ) {
 		break;
 
 	case 'matrix':
-		$selected      = array_column( $manifest['plugins'], 'slug' );
-		$include_trunk = false;
+		$selected = array_column( $manifest['plugins'], 'slug' );
 		foreach ( $args as $arg ) {
 			if ( 0 === strpos( $arg, '--plugins=' ) ) {
 				$selected = explode( ',', substr( $arg, strlen( '--plugins=' ) ) );
-			} elseif ( '--trunk' === $arg ) {
-				$include_trunk = true;
 			}
 		}
-		echo json_encode( build_matrix( $manifest, $selected, $include_trunk ), JSON_PRETTY_PRINT ) . "\n";
+		echo json_encode( build_matrix( $manifest, $selected ), JSON_PRETTY_PRINT ) . "\n";
+		break;
+
+	case 'nightly-matrix':
+		$selected = array_column( $manifest['plugins'], 'slug' );
+		foreach ( $args as $arg ) {
+			if ( 0 === strpos( $arg, '--plugins=' ) ) {
+				$selected = explode( ',', substr( $arg, strlen( '--plugins=' ) ) );
+			}
+		}
+		echo json_encode( build_nightly_matrix( $manifest, $selected ), JSON_PRETTY_PRINT ) . "\n";
 		break;
 
 	case 'affected':

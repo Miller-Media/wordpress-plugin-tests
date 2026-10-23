@@ -1,6 +1,14 @@
 # PHP_VERSION / WP_VERSION default to plugins.json defaults.php_runtime /
 # defaults.wp_latest_tested — override with --build-arg or the Makefile's
 # PHP_VERSION / WP_VERSION env vars (see `make compose`, `make start`).
+#
+# WP_VERSION only pins the base image tag (which may float to a newer patch
+# release, e.g. "7.1" resolving to 7.1.3). It is intentionally NOT exported
+# as a runtime WP_VERSION env var — tests/bootstrap.php instead sniffs the
+# exact installed core version from wp-includes/version.php at test time and
+# checks out the develop.svn test library for that exact version, so core
+# and tests can never drift apart regardless of which patch the image tag
+# resolved to.
 ARG WP_VERSION=7.1
 ARG PHP_VERSION=8.2
 

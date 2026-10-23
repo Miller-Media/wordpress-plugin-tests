@@ -7,6 +7,9 @@
 # Docker usage:
 #   make start               - Start Docker environment (regenerates docker/docker-compose.plugins.yml)
 #   make stop                - Stop Docker environment
+#   make start-host-network  - Same, but with docker/docker-compose.host-network.yml layered
+#                               on top (for boxes where bridge networking can't reach the DB/internet)
+#   make stop-host-network   - Stop the host-network variant
 #   make clean                - Stop and remove volumes
 #   make test                 - Run all tests
 #   make test-unit             - Run unit tests only
@@ -35,6 +38,12 @@ DOCKER_COMPOSE = docker compose -f docker/docker-compose.yml -f docker/docker-co
 CONTAINER = $(DOCKER_COMPOSE) exec -T wordpress
 PLUGIN ?=
 
+# Host-network variant (docker/docker-compose.host-network.yml) — for boxes
+# where Docker's bridge/user-defined networks can't reach the DB or the
+# internet but host networking works. See CLAUDE.md "Docker host networking".
+DOCKER_COMPOSE_HOST_NETWORK = $(DOCKER_COMPOSE) -f docker/docker-compose.host-network.yml
+CONTAINER_HOST_NETWORK = $(DOCKER_COMPOSE_HOST_NETWORK) exec -T wordpress
+
 # Native test environment (override via env vars or `make ... VAR=value`)
 WP_TESTS_DIR ?= /tmp/wordpress-tests-lib
 WP_CORE_DIR ?= /var/www/html
@@ -47,10 +56,20 @@ PHPCS_BIN ?= phpcs
 PHPUNIT_BIN ?= phpunit
 export WP_TESTS_DIR WP_CORE_DIR WP_TESTS_DB_HOST WP_TESTS_DB_NAME WP_TESTS_DB_USER WP_TESTS_DB_PASS WP_TESTS_PHPUNIT_POLYFILLS_PATH
 
+# The native test targets do NOT inherit the Docker-oriented WP_VERSION
+# default above — tests/bootstrap.php resolves the test library version
+# from whatever core is actually at WP_CORE_DIR unless WP_VERSION is
+# explicitly passed (e.g. `make test-native WP_VERSION=6.9.1`). Without
+# this, the blanket default a few lines up would silently override that
+# sniffing for every native run, which is exactly the "6.9.1 core vs.
+# trunk test suite" class of mismatch this is meant to prevent.
+test-native test-plugin-native: WP_VERSION :=
+
 .PHONY: start stop clean restart logs compose setup-tests \
         test test-unit test-integration test-plugin \
         lint lint-fix lint-plugin check-versions pot shell mysql-shell \
-        test-native test-plugin-native lint-native
+        test-native test-plugin-native lint-native \
+        start-host-network stop-host-network compose-host-network
 
 # ── Docker Lifecycle ──────────────────────────────────────────
 
@@ -74,6 +93,25 @@ restart: stop start
 
 logs:
 	$(DOCKER_COMPOSE) logs -f wordpress
+
+# ── Docker Lifecycle (host networking) ──────────────────────────
+#
+# Same as `start`/`stop` above, but with docker/docker-compose.host-network.yml
+# layered on top — use when bridge/user-defined Docker networks can't reach
+# the DB container or the internet. DB is reachable at 127.0.0.1:3307 (dev)
+# / 127.0.0.1:3308 (test) instead of the "db"/"db-test" hostnames.
+
+compose-host-network:
+	php $(MANIFEST) compose > docker/docker-compose.plugins.yml
+
+start-host-network: compose-host-network
+	$(DOCKER_COMPOSE_HOST_NETWORK) up -d --build
+	@echo ""
+	@echo "WordPress is starting at http://localhost:8080"
+	@echo "Run 'make setup-tests' once the container is ready."
+
+stop-host-network:
+	$(DOCKER_COMPOSE_HOST_NETWORK) down
 
 # ── Test Setup ────────────────────────────────────────────────
 

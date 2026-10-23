@@ -1,6 +1,11 @@
 #!/bin/bash
 set -e
 
+# Note: this script only installs WordPress core (via the stock entrypoint)
+# and activates plugins — it never touches the PHPUnit test library. That's
+# resolved separately by tests/bootstrap.php to match whatever core version
+# ends up installed here (see the Dockerfile's WP_VERSION comment).
+
 # Run the default WordPress entrypoint first
 docker-entrypoint.sh apache2-foreground &
 WP_PID=$!

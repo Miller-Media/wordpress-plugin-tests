@@ -40,6 +40,10 @@ make lint           # PHPCS lint all plugins (report-only — see CI)
 make shell          # Shell into the WordPress container
 ```
 
+### Docker host networking
+
+Some boxes can't reach the DB container or the internet over Docker's bridge/user-defined networks, but host networking works fine. `make start-host-network` / `make stop-host-network` layer `docker/docker-compose.host-network.yml` on top of the normal compose files: all three services join the host's network namespace directly, so cross-container hostnames (`db`, `db-test`) stop resolving — the `wordpress` service instead reaches the DBs at `127.0.0.1:3307` (dev) / `127.0.0.1:3308` (test), ports chosen so they don't collide with a MySQL that might already be running on the host's default 3306. Validate the merged config with `docker compose -f docker/docker-compose.yml -f docker/docker-compose.plugins.yml -f docker/docker-compose.host-network.yml config`.
+
 ## Quick Start (native, no Docker)
 
 ```bash
@@ -55,6 +59,8 @@ make lint-native
 
 `bin/setup-native.sh` symlinks every plugin checkout it finds (by manifest `install_dir`) into `$WP_CORE_DIR/wp-content/plugins/`, so it works whether you have one plugin checked out or all nine. `PHPCS_BIN`/`PHPUNIT_BIN` env vars override the native binaries used by `*-native` Makefile targets if they're not on `$PATH`.
 
+**Core and the test library are always pinned together.** `bin/setup-native.sh <wp-version>` resolves `<wp-version>` (`6.9.1`, `latest`, `trunk`, or `nightly`) to a single develop.svn ref and downloads *both* core and the PHPUnit test library from that same ref — they can never drift apart. It stamps the resolved version into `$WP_TESTS_DIR/.wp-tests-ref`, and `tests/bootstrap.php` checks that stamp against the core it's actually running against (reading `wp-includes/version.php` when `WP_VERSION` isn't set), **failing loudly** on a mismatch (e.g. "6.9.1 core against the trunk test suite") and warning only when it can't determine a match (no stamp present, e.g. a hand-provisioned environment). `nightly` resolves to the latest published beta/RC (`tags/<rc>` for both core and tests, same as any tagged version) if one exists, otherwise the WordPress.org nightly-builds zip for core + develop.svn `trunk` for tests. Docker follows the same rule by not setting a runtime `WP_VERSION` at all — `tests/bootstrap.php` sniffs whatever core version the base image actually installed.
+
 ## The manifest (`plugins.json`)
 
 ```jsonc
@@ -68,11 +74,16 @@ make lint-native
   },
   "plugins": [ /* one entry per plugin — dir, repo, svn_slug, install_dir, main_file,
                    version_constant, text_domains, requires_php/requires_wp, wc, dependencies,
-                   api_mocks, fixtures, lint_exclude, integration_secrets, tests_dir */ ]
+                   api_mocks, fixtures, lint_exclude, integration_secrets, tests_dir,
+                   wc_optional_leg (optional) */ ]
 }
 ```
 
-Query it with `bin/manifest.php` — `dirs`, `slugs`, `field <slug> <dotted.field>`, `matrix [--plugins=a,b] [--trunk]`, `affected <path>...` (maps changed files to plugin slugs; shared files map to every plugin), `check-headers` (manifest vs. plugin header drift, exits non-zero on mismatch), `compose` (emits `docker-compose.plugins.yml`).
+`wc_optional_leg` (currently only on `send-emails-with-mandrill`, set to `"latest"`) adds one extra CI leg — and one extra nightly leg — that activates WooCommerce even though the plugin doesn't declare a `woocommerce` dependency. It exists because Mandrill's #152 regression was only triggered when WooCommerce was active; `tests/bootstrap.php` loads WooCommerce for that leg when it sees `MM_TESTS_WITH_WC=1` in the environment. Only use this for a plugin that's WC-*compatible but not WC-dependent* — a plugin that actually requires WooCommerce should set `wc`/`dependencies` instead, not this.
+
+Query it with `bin/manifest.php` — `dirs`, `slugs`, `field <slug> <dotted.field>`, `matrix [--plugins=a,b]`, `nightly-matrix [--plugins=a,b]` (same shape, one `wp=nightly` leg per plugin — see "Nightly WP compatibility" below), `affected <path>...` (maps changed files to plugin slugs; shared files map to every plugin), `check-headers` (manifest vs. plugin header drift, exits non-zero on mismatch; also prints non-fatal `NOTE` lines when a plugin's live "Tested up to"/"WC tested up to" has fallen behind `defaults.wp_latest_tested`/`wc_latest_tested`), `compose` (emits `docker-compose.plugins.yml`).
+
+`field <slug> wc.tested` and `field <slug> tested_up_to` are special-cased to read live from the plugin's own readme.txt/header rather than plugins.json — there is no `wc.tested` or `tested_up_to` value to hand-maintain in the manifest; bumping a plugin's own header (manually or via `bump-tested-up-to.yml`) is always enough, and never requires a matching manifest edit or fails a harness check.
 
 ## Plugins
 
@@ -270,15 +281,18 @@ SVN slugs (differ from directory/slug names for some plugins — see `plugins.js
 
 ### Workflows (`.github/workflows/`)
 
-- **`ci.yml`** — reusable (`workflow_call`, inputs `plugin`, `harness_ref`) and directly triggered here on `pull_request`/`push` to `main`. Jobs: `changes` (maps changed files to affected plugin slugs via `bin/manifest.php affected`), `matrix` (`bin/manifest.php matrix --trunk`), `test` (one native run per plugin × PHP × WP, PHPCS report-only as an artifact + step summary, `bin/check-versions.php`), and **`ci-result`** — the single required check; it fails if `changes`/`matrix` didn't succeed or any `test` leg genuinely failed (allow-failure `trunk` legs don't count against it).
-- **`release.yml`** — reusable deploy workflow described above. Secrets: `SVN_USERNAME`, `SVN_PASSWORD` (required), `HARNESS_DEPLOY_KEY` (optional, see caveat below).
-- **`bump-tested-up-to.yml`** — scheduled weekly (+ `workflow_dispatch`); checks `api.wordpress.org` for the latest WP/WooCommerce versions, and opens a PR in any plugin repo whose `Tested up to` / `WC tested up to` is behind (never touches Version/Stable tag). Logic lives in `bin/bump-tested-up-to.php` so it's runnable/testable locally with `--dry-run`.
-- **`claude-issue.yml`** — reusable + used here; lets Claude Code implement an issue labeled `claude` (or a comment mentioning `@claude` from an OWNER/MEMBER/COLLABORATOR) on a new branch and open a PR. Never merges, tags, or deploys.
+- **`ci.yml`** — reusable (`workflow_call`, inputs `plugin`, `harness_ref`; secret `HARNESS_DEPLOY_KEY` optional) and directly triggered here on `pull_request`/`push` to `main`/weekly `schedule`. Jobs: `changes` (maps changed files to affected plugin slugs via `bin/manifest.php affected`; on `schedule` it's every manifest slug instead), `matrix` (`bin/manifest.php matrix`), `test` (one native run per plugin × PHP × WP, PHPCS report-only as an artifact + step summary, `bin/check-versions.php`), and **`ci-result`** — the single required check; it fails if `changes`/`matrix` didn't succeed or any `test` leg genuinely failed. `matrix`/`test` (and so `ci-result`'s normal work) are skipped entirely on the `schedule` trigger — that trigger exists only to drive the nightly job below.
+- **`release.yml`** — reusable deploy workflow described above. Inputs: `plugin` (required), `dry_run`, `harness_ref`. Secrets: `SVN_USERNAME`, `SVN_PASSWORD` (required), `HARNESS_DEPLOY_KEY` (optional, see caveat below). Caller template triggers on `v*` tag push and `workflow_dispatch` (for `dry_run` rehearsals).
+- **Nightly WP compatibility (non-blocking)** — `nightly_matrix` + `nightly` jobs in `ci.yml`. Deliberately **not** in `ci-result`'s `needs:` and the test step is `continue-on-error: true`, so a nightly failure never blocks a PR or a release. Runs every *affected* plugin on `pull_request` (and on a `workflow_call` from a plugin repo's own PR), and *every* manifest plugin on the weekly `schedule` (which only ever fires here, in the harness repo — a reusable `workflow_call` never gets its own cron trigger). Tests against the latest published WP beta/RC if one exists, else true trunk (`bin/manifest.php nightly-matrix` + `bin/setup-native.sh <slug> nightly`); includes the `wc_optional_leg` leg the same way the blocking matrix does, so e.g. `send-emails-with-mandrill` gets WooCommerce-active nightly coverage too. The job's display name is literally `nightly (non-blocking) (...)` — never add it (or `nightly_matrix`) to required checks.
+- **`bump-tested-up-to.yml`** — scheduled weekly (+ `workflow_dispatch`); checks `api.wordpress.org` for the latest WP/WooCommerce versions, and opens a PR in any plugin repo whose `Tested up to` / `WC tested up to` is behind (never touches Version/Stable tag). Logic lives in `bin/bump-tested-up-to.php` so it's runnable/testable locally with `--dry-run`. This, not plugins.json, is the authoritative place these values live — see `live_tested_up_to()` in `bin/manifest.php`.
+- **`claude-issue.yml`** — reusable (`workflow_call`, secret `CLAUDE_CODE_OAUTH_TOKEN` required) + directly triggered here; lets Claude Code implement an issue labeled `claude` (or a comment mentioning `@claude` from an OWNER/MEMBER/COLLABORATOR) on a new branch and open a PR. Never merges, tags, or deploys.
 - **`.github/dependabot.yml`** — weekly, grouped GitHub Actions updates.
+
+All three reusable workflows' `workflow_call` inputs/secrets are matched 1:1 by the templates in `docs/caller-workflows/` (`ci.yml` → `plugin` + `secrets: inherit`; `release.yml` → `plugin`, `dry_run` + `secrets: inherit`; `claude.yml` → `secrets: inherit`) — if you add/rename an input or secret on one side, update the other.
 
 ### Required check to configure
 
-Set branch protection (on both this repo and every plugin repo) to require **`ci-result`** only — it's the aggregate job and is designed to be the single gate.
+Set branch protection (on both this repo and every plugin repo) to require **`ci-result`** only (exact check name) — it's the aggregate job and is designed to be the single gate. Do **not** require `nightly_matrix` or the `nightly (non-blocking) (...)` job(s) — they're informational by design and will never report as a single stable check name (one per matrix leg).
 
 ### Pinned actions
 
@@ -304,7 +318,9 @@ Useful env vars for `*-native` Makefile targets and `tests/bootstrap.php` direct
 | `WP_TESTS_DB_HOST` / `_NAME` / `_USER` / `_PASS` | Test database connection |
 | `WP_TESTS_PHPUNIT_POLYFILLS_PATH` | Explicit path to `yoast/phpunit-polyfills` (falls back to `$COMPOSER_HOME/vendor/...`, then `/root/.composer/vendor/...`) |
 | `PHPCS_BIN` / `PHPUNIT_BIN` | Override the binaries used by `lint-native` / `test-native` if not on `$PATH` |
+| `WP_VERSION` | Explicit test-lib version/ref for `tests/bootstrap.php` (`trunk`, or e.g. `6.9.1`). Unset/`latest` means "sniff the installed core's own version" — never assumed to mean trunk. |
+| `MM_TESTS_WITH_WC` | Set to `1` to load WooCommerce in `tests/bootstrap.php` even for a plugin that doesn't declare it as a dependency — used for a manifest `wc_optional_leg` (e.g. `send-emails-with-mandrill`'s #152 regression leg). |
 
-`bin/setup-native.sh <wp-version> [options]` provisions `WP_CORE_DIR`/`WP_TESTS_DIR` from scratch (WP core + matching develop.svn test lib + WooCommerce if any manifest plugin needs it + plugin symlinks); see its `--help`-style header comment for all options.
+`bin/setup-native.sh <wp-version> [options]` provisions `WP_CORE_DIR`/`WP_TESTS_DIR` from scratch (WP core + matching develop.svn test lib, from the *same* ref so they can never drift apart + WooCommerce if any manifest plugin needs it + plugin symlinks); see its `--help`-style header comment for all options, including `nightly` as a `<wp-version>` and `--wc-zip=PATH` to skip the WooCommerce download.
 
 **Never commit real credentials.** `tests/.env` is gitignored; copy `tests/.env.example`.

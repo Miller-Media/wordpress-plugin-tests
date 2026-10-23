@@ -55,22 +55,84 @@ if ( ! defined( 'WP_TESTS_PHPUNIT_POLYFILLS_PATH' ) ) {
 $_tests_dir = getenv( 'WP_TESTS_DIR' ) ?: '/tmp/wordpress-tests-lib';
 $_core_dir  = getenv( 'WP_CORE_DIR' ) ?: '/var/www/html';
 
+/**
+ * Resolve which develop.svn ref the test library should come from: an
+ * explicit WP_VERSION wins, "trunk" means trunk, and otherwise (unset or
+ * "latest") we read the *actually installed* core version straight out of
+ * wp-includes/version.php — never assume "latest" means trunk, that's what
+ * caused the test suite to silently pin to trunk against a pinned core.
+ *
+ * @return array{0: string, 1: string} [ref for develop.svn, label for the marker file]
+ */
+function mm_tests_resolve_test_lib_ref( $core_dir ) {
+	$wp_version = getenv( 'WP_VERSION' ) ?: '';
+
+	if ( 'trunk' === $wp_version ) {
+		return array( 'trunk', 'trunk' );
+	}
+
+	if ( '' !== $wp_version && 'latest' !== $wp_version ) {
+		return array( "tags/{$wp_version}", $wp_version );
+	}
+
+	// Unset or "latest" — sniff the exact installed core version.
+	$version_file = $core_dir . '/wp-includes/version.php';
+	if ( file_exists( $version_file ) ) {
+		$contents = file_get_contents( $version_file );
+		if ( preg_match( '/\$wp_version\s*=\s*[\'"]([^\'"]+)[\'"]/', $contents, $m ) ) {
+			$installed = $m[1];
+			// Trunk/dev snapshots look like "6.9-alpha-60000".
+			if ( false !== strpos( $installed, '-alpha' ) ) {
+				return array( 'trunk', 'trunk' );
+			}
+			// Some develop.svn tag exports append "-src" to the source
+			// package's own version string (e.g. "6.4.5-src") — strip it so
+			// it still resolves to the real "tags/6.4.5" ref.
+			$installed = preg_replace( '/-src$/', '', $installed );
+			return array( "tags/{$installed}", $installed );
+		}
+	}
+
+	echo "WARNING: could not determine the installed core version from {$version_file}; falling back to trunk for the test suite. Set WP_VERSION to pin it explicitly.\n";
+	return array( 'trunk', 'trunk' );
+}
+
+list( $_test_lib_svn_ref, $_test_lib_label ) = mm_tests_resolve_test_lib_ref( $_core_dir );
+
 // Download the WP test suite if it doesn't exist
 if ( ! file_exists( $_tests_dir . '/includes/functions.php' ) ) {
-	$wp_version = getenv( 'WP_VERSION' ) ?: 'latest';
-
-	echo "Downloading WordPress test suite...\n";
+	echo "Downloading WordPress test suite ({$_test_lib_svn_ref})...\n";
 
 	// Create the directory
 	@mkdir( $_tests_dir, 0777, true );
 
-	// Download using svn
-	$svn_url = ( 'latest' === $wp_version )
-		? 'https://develop.svn.wordpress.org/trunk/tests/phpunit'
-		: "https://develop.svn.wordpress.org/tags/{$wp_version}/tests/phpunit";
+	$svn_url = "https://develop.svn.wordpress.org/{$_test_lib_svn_ref}/tests/phpunit";
 
 	exec( "svn co --quiet {$svn_url}/includes/ {$_tests_dir}/includes/" );
 	exec( "svn co --quiet {$svn_url}/data/ {$_tests_dir}/data/" );
+
+	file_put_contents( $_tests_dir . '/.wp-tests-ref', $_test_lib_label );
+}
+
+// ── Guard against a stale/mismatched test library ──────────────
+//
+// bin/setup-native.sh (and this file's own downloader above) stamp
+// .wp-tests-ref with the version the test library was fetched for. If a
+// test library is already present (e.g. reused from a previous run) and
+// its stamp disagrees with what we'd resolve *now*, that's exactly the
+// "6.9.1 core against the trunk test suite" class of bug — fail loudly
+// rather than silently running mismatched code. If there's no stamp at
+// all (e.g. a hand-provisioned environment), we can't be sure, so warn
+// instead of failing.
+$_tests_ref_marker = $_tests_dir . '/.wp-tests-ref';
+if ( file_exists( $_tests_ref_marker ) ) {
+	$_stamped_label = trim( file_get_contents( $_tests_ref_marker ) );
+	if ( '' !== $_stamped_label && $_stamped_label !== $_test_lib_label ) {
+		fwrite( STDERR, "FATAL: WP test library at {$_tests_dir} was fetched for version '{$_stamped_label}' but the running core resolves to '{$_test_lib_label}'. Re-run bin/setup-native.sh (or clear WP_TESTS_DIR) so core and the test suite match.\n" );
+		exit( 1 );
+	}
+} else {
+	echo "WARNING: {$_tests_dir}/.wp-tests-ref not found — cannot confirm the test library matches the installed core version ({$_test_lib_label}).\n";
 }
 
 // Create wp-tests-config.php if it doesn't exist
@@ -216,8 +278,10 @@ tests_add_filter( 'muplugins_loaded', function () use ( $manifest ) {
 		require_once $mandrill_path . '/lib/wpMandrill.class.php';
 	}
 
-	// ── WooCommerce (only loaded if a checked-out plugin needs it) ─
-	$needs_woocommerce = false;
+	// ── WooCommerce (loaded if a checked-out plugin needs it, or the
+	//    MM_TESTS_WITH_WC=1 optional-WC-leg env var is set for a plugin
+	//    that declares a manifest "wc_optional_leg", e.g. send-emails-with-mandrill) ─
+	$needs_woocommerce = ( '1' === getenv( 'MM_TESTS_WITH_WC' ) );
 	foreach ( $manifest['plugins'] as $plugin ) {
 		if ( in_array( 'woocommerce', $plugin['dependencies'], true ) && $dir( $plugin['slug'] ) && is_dir( $dir( $plugin['slug'] ) ) ) {
 			$needs_woocommerce = true;

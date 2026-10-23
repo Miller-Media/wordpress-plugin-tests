@@ -14,6 +14,9 @@ services:
       WORDPRESS_DB_PASSWORD: wordpress
       WORDPRESS_DB_NAME: wordpress
       WORDPRESS_DEBUG: 1
+      # WP_VERSION is deliberately NOT set here — see the Dockerfile note.
+      # tests/bootstrap.php resolves the test library version by reading
+      # the core actually installed at WP_CORE_DIR (default /var/www/html).
     # Per-plugin mounts live in docker/docker-compose.plugins.yml, generated
     # from plugins.json by `make compose` (run automatically by `make start`).
     volumes:
@@ -28,8 +31,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    networks:
-      - wp-test
+    # No explicit `networks:` — these three services share Compose's
+    # implicit per-project default network, which already gives them
+    # name-based discovery (db, db-test, wordpress). Leaving it implicit
+    # (rather than a named custom network) is what lets
+    # docker-compose.host-network.yml add `network_mode: host` on top
+    # without an explicit `networks:` key to conflict with it.
 
   db:
     image: mysql:8.0
@@ -45,8 +52,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    networks:
-      - wp-test
 
   # Separate database for tests so they don't interfere with the dev site
   db-test:
@@ -63,11 +68,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    networks:
-      - wp-test
 
 volumes:
   db_data:
-
-networks:
-  wp-test:
