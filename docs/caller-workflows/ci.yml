@@ -1,0 +1,19 @@
+# Copy into a plugin repo as .github/workflows/ci.yml, replacing <slug>
+# with that plugin's manifest slug from Miller-Media/wordpress-plugin-tests
+# plugins.json (e.g. "cloudflare-ip-blacklist").
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master, main]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: Miller-Media/wordpress-plugin-tests/.github/workflows/ci.yml@main
+    with:
+      plugin: <slug>
+    secrets: inherit

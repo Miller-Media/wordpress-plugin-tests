@@ -1,0 +1,140 @@
+name: Bump tested-up-to
+
+# Weekly (and on-demand) check: is any plugin's "Tested up to" (WordPress)
+# or "WC tested up to" behind the latest published version? If so, open a
+# PR in that plugin's own repo bumping the header — never Version/Stable
+# tag, see bin/bump-tested-up-to.php.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1' # Mondays 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Report what would change without opening any PRs.'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check latest WP / WooCommerce versions
+    runs-on: ubuntu-latest
+    outputs:
+      wp_version: ${{ steps.latest.outputs.wp_version }}
+      wc_version: ${{ steps.latest.outputs.wc_version }}
+    steps:
+      - name: Fetch latest published versions
+        id: latest
+        run: |
+          set -euo pipefail
+          WP_VERSION=$(curl -s https://api.wordpress.org/core/version-check/1.7/ | php -r '$d=json_decode(stream_get_contents(STDIN),true); echo $d["offers"][0]["version"];')
+          WC_VERSION=$(curl -s "https://api.wordpress.org/plugins/info/1.2/?action=plugin_information&request[slug]=woocommerce" | php -r '$d=json_decode(stream_get_contents(STDIN),true); echo $d["version"];')
+          echo "Latest WP: $WP_VERSION, latest WooCommerce: $WC_VERSION"
+          echo "wp_version=$WP_VERSION" >> "$GITHUB_OUTPUT"
+          echo "wc_version=$WC_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout harness
+        uses: actions/checkout@v4
+
+      - name: List plugins needing a bump (informational — dry run against this checkout)
+        run: |
+          for slug in $(php bin/manifest.php slugs); do
+            echo "--- $slug ---"
+            php bin/bump-tested-up-to.php "$slug" --dry-run \
+              --wp-version="${{ steps.latest.outputs.wp_version }}" \
+              --wc-version="${{ steps.latest.outputs.wc_version }}" || true
+          done
+
+  bump:
+    name: Bump (${{ matrix.slug }})
+    needs: check
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        slug:
+          - cloudflare-ip-blacklist
+          - edit-usernames
+          - expire-passwords
+          - protect-the-children
+          - send-emails-with-mandrill
+          - wooflare
+          - one-off-emails-for-woocommerce
+          - import-from-server
+          - miller-media-csv-importer
+    steps:
+      - name: Checkout harness
+        uses: actions/checkout@v4
+        with:
+          path: harness
+
+      - name: Look up repo for this slug
+        id: lookup
+        working-directory: harness
+        run: |
+          echo "repo=$(php bin/manifest.php field ${{ matrix.slug }} repo)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout plugin repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.lookup.outputs.repo }}
+          token: ${{ secrets.BUMP_BOT_TOKEN }}
+          path: plugin
+
+      - name: Compute bump
+        id: bump
+        working-directory: harness
+        run: |
+          set -euo pipefail
+          OUTPUT=$(php bin/bump-tested-up-to.php "${{ matrix.slug }}" \
+            --plugin-dir="${{ github.workspace }}/plugin" \
+            --wp-version="${{ needs.check.outputs.wp_version }}" \
+            --wc-version="${{ needs.check.outputs.wc_version }}" \
+            ${{ inputs.dry_run && '--dry-run' || '' }}) || true
+          echo "$OUTPUT"
+          CHANGED=$(echo "$OUTPUT" | php -r '$d=json_decode(stream_get_contents(STDIN),true); echo $d["changed"] ? "true" : "false";')
+          WP_TO=$(echo "$OUTPUT" | php -r '$d=json_decode(stream_get_contents(STDIN),true); echo $d["wp"]["to"] ?? "";')
+          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
+          echo "wp_to=$WP_TO" >> "$GITHUB_OUTPUT"
+
+      - name: Run this plugin's tests against the new version
+        if: ${{ steps.bump.outputs.changed == 'true' && inputs.dry_run != true }}
+        working-directory: harness
+        env:
+          WP_TESTS_DB_HOST: 127.0.0.1
+        run: |
+          bin/setup-native.sh "${{ needs.check.outputs.wp_version }}" \
+            --plugins-root="${{ github.workspace }}" \
+            --core-dir="${RUNNER_TEMP}/wp-core" \
+            --tests-dir="${RUNNER_TEMP}/wp-tests-lib"
+          WP_CORE_DIR="${RUNNER_TEMP}/wp-core" WP_TESTS_DIR="${RUNNER_TEMP}/wp-tests-lib" \
+            make test-plugin-native PLUGIN=${{ matrix.slug }}
+
+      - name: Open PR in plugin repo
+        if: ${{ steps.bump.outputs.changed == 'true' && inputs.dry_run != true }}
+        working-directory: plugin
+        env:
+          GH_TOKEN: ${{ secrets.BUMP_BOT_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          BRANCH="chore/tested-up-to-${{ steps.bump.outputs.wp_to }}"
+
+          if gh pr list --repo "${{ steps.lookup.outputs.repo }}" --head "$BRANCH" --json number --jq 'length' | grep -qx 0; then
+            git config user.name 'miller-media-bump-bot'
+            git config user.email 'bump-bot@users.noreply.github.com'
+            git checkout -b "$BRANCH"
+            git add -A
+            git commit -m "Bump tested-up-to to WordPress ${{ steps.bump.outputs.wp_to }}"
+            git push origin "$BRANCH"
+            gh pr create --repo "${{ steps.lookup.outputs.repo }}" \
+              --title "Bump tested-up-to to WordPress ${{ steps.bump.outputs.wp_to }}" \
+              --body "Automated bump opened by bump-tested-up-to.yml. Never touches Version/Stable tag." \
+              --head "$BRANCH"
+          else
+            echo "A PR on branch $BRANCH already exists — skipping."
+          fi

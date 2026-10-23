@@ -1,0 +1,159 @@
+name: Release
+
+# Reusable deploy workflow. A plugin repo's caller workflow
+# (docs/caller-workflows/release.yml) triggers on a `vX.Y.Z` tag push and
+# calls this with `plugin: <slug>`.
+#
+# `verify` refuses to proceed unless the exact tagged commit already has a
+# green "ci-result" check (the single required check from ci.yml) — tags
+# are not re-tested here, they're gated on having already passed CI.
+#
+# `deploy` requires manual approval via the `wordpress-org` GitHub
+# Environment — configure required reviewers on that environment in this
+# repo's (and/or the calling plugin repo's) settings.
+
+on:
+  workflow_call:
+    inputs:
+      plugin:
+        description: 'Manifest slug to release.'
+        required: true
+        type: string
+      dry_run:
+        description: 'Run everything except the actual SVN commit.'
+        required: false
+        type: boolean
+        default: false
+      harness_ref:
+        description: 'Ref of Miller-Media/wordpress-plugin-tests to check out.'
+        required: false
+        type: string
+        default: 'main'
+    secrets:
+      SVN_USERNAME:
+        required: true
+      SVN_PASSWORD:
+        required: true
+      HARNESS_DEPLOY_KEY:
+        description: 'Deploy key with read access to Miller-Media/wordpress-plugin-tests. Only required while the harness repo is private.'
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Release / verify
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.parse.outputs.version }}
+      svn_slug: ${{ steps.parse.outputs.svn_slug }}
+    steps:
+      - name: Checkout harness
+        uses: actions/checkout@v4
+        with:
+          repository: Miller-Media/wordpress-plugin-tests
+          ref: ${{ inputs.harness_ref }}
+          ssh-key: ${{ secrets.HARNESS_DEPLOY_KEY }}
+          path: harness
+
+      - name: Checkout plugin at release tag
+        uses: actions/checkout@v4
+        with:
+          path: harness/plugin
+
+      - name: Parse version from tag and check manifest
+        id: parse
+        working-directory: harness
+        run: |
+          set -euo pipefail
+
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '$TAG' is not in the expected vX.Y.Z format."
+            exit 1
+          fi
+
+          WPORG=$(php bin/manifest.php field "${{ inputs.plugin }}" wporg)
+          if [ "$WPORG" != "true" ]; then
+            echo "::error::Plugin '${{ inputs.plugin }}' is marked wporg=false in plugins.json and must never be deployed to WordPress.org."
+            exit 1
+          fi
+
+          SVN_SLUG=$(php bin/manifest.php field "${{ inputs.plugin }}" svn_slug)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "svn_slug=$SVN_SLUG" >> "$GITHUB_OUTPUT"
+
+      - name: Require a green ci-result on this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          REPO="${{ github.repository }}"
+          SHA="${{ github.sha }}"
+
+          CONCLUSION=$(gh api "repos/${REPO}/commits/${SHA}/check-runs" \
+            --jq '.check_runs[] | select(.name == "ci-result") | .conclusion' | head -1)
+
+          if [ "$CONCLUSION" != "success" ]; then
+            echo "::error::No successful 'ci-result' check found on commit ${SHA}. Found: '${CONCLUSION:-none}'. Releases are only built from commits that passed CI."
+            exit 1
+          fi
+          echo "ci-result on ${SHA} is green — proceeding."
+
+      - name: Verify version consistency against the tag
+        working-directory: harness
+        run: php bin/check-versions.php "${{ inputs.plugin }}" "${{ steps.parse.outputs.version }}"
+
+  deploy:
+    name: Release / deploy
+    needs: verify
+    environment: wordpress-org
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout harness
+        uses: actions/checkout@v4
+        with:
+          repository: Miller-Media/wordpress-plugin-tests
+          ref: ${{ inputs.harness_ref }}
+          ssh-key: ${{ secrets.HARNESS_DEPLOY_KEY }}
+          path: harness
+
+      - name: Checkout plugin at release tag
+        uses: actions/checkout@v4
+        with:
+          path: plugin
+
+      - name: Deploy to WordPress.org SVN
+        uses: 10up/action-wordpress-plugin-deploy@stable
+        with:
+          generate-zip: false
+        env:
+          SVN_USERNAME: ${{ secrets.SVN_USERNAME }}
+          SVN_PASSWORD: ${{ secrets.SVN_PASSWORD }}
+          SLUG: ${{ needs.verify.outputs.svn_slug }}
+          VERSION: ${{ needs.verify.outputs.version }}
+          ASSETS_DIR: plugin/.wordpress-org
+          DRY_RUN: ${{ inputs.dry_run }}
+
+      - name: Extract changelog entry for this version
+        id: changelog
+        run: |
+          set -euo pipefail
+          php harness/bin/extract-changelog.php "plugin/readme.txt" "${{ needs.verify.outputs.version }}" > /tmp/changelog.md
+          cat /tmp/changelog.md
+
+      - name: Create GitHub release
+        if: ${{ inputs.dry_run != true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ needs.verify.outputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --title "${{ needs.verify.outputs.version }}" \
+            --notes-file /tmp/changelog.md
+        working-directory: plugin

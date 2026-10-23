@@ -1,0 +1,53 @@
+name: Claude Issue
+
+# Reusable + used directly in this repo. Lets Claude Code implement a
+# requested change from a GitHub issue/comment, on a new branch, with a PR
+# at the end for human review — it never merges, tags, or deploys anything.
+
+on:
+  issues:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+  workflow_call:
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  claude:
+    name: Claude Issue / implement
+    if: >-
+      (github.event_name == 'issues' && github.event.label.name == 'claude') ||
+      (github.event_name == 'issue_comment' &&
+       contains(github.event.comment.body, '@claude') &&
+       contains(fromJson('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            Read CLAUDE.md in the repository root first — it documents this
+            repo's manifest-driven structure and conventions.
+
+            Implement what's requested in this issue/comment on a new
+            branch. Run the relevant tests (see CLAUDE.md for native and
+            Docker test commands) before finishing. Open a pull request
+            describing the change.
+
+            Never merge a PR, never create or push a git tag, and never run
+            anything that deploys to WordPress.org or SVN — those steps are
+            human-approved via the release workflow.

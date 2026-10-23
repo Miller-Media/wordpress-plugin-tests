@@ -1,0 +1,20 @@
+# Copy into a plugin repo as .github/workflows/release.yml, replacing
+# <slug> with that plugin's manifest slug. Triggers on pushing a `vX.Y.Z`
+# tag (create the tag only after bumping Version/Stable tag + changelog
+# and merging — see CLAUDE.md "Releasing a Plugin").
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    uses: Miller-Media/wordpress-plugin-tests/.github/workflows/release.yml@main
+    with:
+      plugin: <slug>
+    secrets: inherit
