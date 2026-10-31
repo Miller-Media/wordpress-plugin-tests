@@ -220,13 +220,20 @@ jobs:
       - name: Install dev tooling (pinned versions)
         run: |
           composer global config allow-plugins.dealerdirect/phpcodesniffer-composer-installer true
-          composer global require --dev \
-            squizlabs/php_codesniffer:3.13.6 \
-            wp-coding-standards/wpcs:3.4.1 \
-            phpcompatibility/phpcompatibility-wp:2.1.8 \
-            dealerdirect/phpcodesniffer-composer-installer:1.2.1 \
-            yoast/phpunit-polyfills:2.0.5 \
-            phpunit/phpunit:^9.6
+          # Retry: Packagist occasionally returns 5xx (e.g. HTTP 504 on
+          # packages.json), which used to fail random matrix legs.
+          for attempt in 1 2 3; do
+            composer global require --dev \
+              squizlabs/php_codesniffer:3.13.6 \
+              wp-coding-standards/wpcs:3.4.1 \
+              phpcompatibility/phpcompatibility-wp:2.1.8 \
+              dealerdirect/phpcodesniffer-composer-installer:1.2.1 \
+              yoast/phpunit-polyfills:2.0.5 \
+              phpunit/phpunit:^9.6 && break
+            if [ "$attempt" -eq 3 ]; then echo "::error::composer global require failed after 3 attempts"; exit 1; fi
+            echo "::warning::composer global require failed (attempt $attempt), retrying in $((attempt * 15))s"
+            sleep $((attempt * 15))
+          done
           echo "COMPOSER_HOME=$(composer config -g home)" >> "$GITHUB_ENV"
 
       - name: Verify PHPUnit version
@@ -507,7 +514,12 @@ jobs:
       - name: Install dev tooling (pinned versions)
         run: |
           composer global config allow-plugins.dealerdirect/phpcodesniffer-composer-installer true
-          composer global require --dev yoast/phpunit-polyfills:2.0.5 phpunit/phpunit:^9.6
+          for attempt in 1 2 3; do
+            composer global require --dev yoast/phpunit-polyfills:2.0.5 phpunit/phpunit:^9.6 && break
+            if [ "$attempt" -eq 3 ]; then echo "::error::composer global require failed after 3 attempts"; exit 1; fi
+            echo "::warning::composer global require failed (attempt $attempt), retrying in $((attempt * 15))s"
+            sleep $((attempt * 15))
+          done
           echo "COMPOSER_HOME=$(composer config -g home)" >> "$GITHUB_ENV"
 
       - name: Verify PHPUnit version
