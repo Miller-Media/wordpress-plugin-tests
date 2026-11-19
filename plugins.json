@@ -1,7 +1,7 @@
 {
   "defaults": {
     "php_runtime": "8.2",
-    "php_latest": "8.5",
+    "php_latest": "8.6",
     "wp_ci_floor": "6.4",
     "wc_latest_tested": "11.2",
     "wp_latest_tested": "7.1"
