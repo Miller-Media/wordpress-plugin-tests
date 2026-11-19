@@ -181,7 +181,7 @@ function version_max( $a, $b ) {
  * The fixed PHP sweep every plugin's "wp=latest" leg runs across, newest
  * version first isn't required — order just has to be deterministic.
  */
-const CI_PHP_VERSIONS = array( '8.1', '8.2', '8.3', '8.4', '8.5' );
+const CI_PHP_VERSIONS = array( '8.1', '8.2', '8.3', '8.4', '8.5', '8.6' );
 
 function build_matrix( $manifest, $slugs ) {
 	$defaults = $manifest['defaults'];
