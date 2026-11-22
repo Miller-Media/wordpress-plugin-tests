@@ -353,6 +353,8 @@ tests_add_filter( 'muplugins_loaded', function () use ( $manifest ) {
 
 		require_once $mmsfi_path . '/inc/class-mmsfi-file-browser.php';
 		require_once $mmsfi_path . '/inc/class-mmsfi-importer.php';
+		// Class only (not instantiated): enqueueAssets() reads MMSFI_REST_API::NAMESPACE.
+		require_once $mmsfi_path . '/inc/class-mmsfi-rest-api.php';
 		require_once $mmsfi_path . '/inc/class-mmsfi-settings.php';
 		require_once $mmsfi_path . '/inc/class-mmsfi-plugin.php';
 	}
