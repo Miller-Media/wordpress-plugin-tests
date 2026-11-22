@@ -357,9 +357,8 @@ jobs:
   # workflow is invoked as a reusable call from the plugin's own repo
   # (matrix.blocking, computed in plugin_check_matrix from CALLER_PLUGIN).
   # Non-blocking (continue-on-error) for the harness's own direct runs and
-  # for the one manifest plugin with wporg:false (miller-media-csv-importer),
-  # since that plugin is never deployed to SVN and plugin-check's
-  # wp.org-centric rules aren't a meaningful gate for it.
+  # for any wporg:false plugin, whose plugin-check results are not a
+  # meaningful gate for WordPress.org deployment.
   plugin-check:
     name: "CI / plugin-check (${{ matrix.slug }})"
     needs: plugin_check_matrix
@@ -557,7 +556,8 @@ jobs:
 
   # ── Single required check: configure branch protection on this ──
   # (plugin-check's own job-level continue-on-error already makes its
-  # result read as "success" for wporg:false plugins — see that job.)
+  # result read as "success" when matrix.blocking is false — harness
+  # direct runs and any wporg:false plugin; see that job.)
   ci-result:
     name: ci-result
     if: always()

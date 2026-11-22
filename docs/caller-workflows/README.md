@@ -19,8 +19,8 @@ invoke it with no `secrets:` block at all.
   nothing else) on the plugin repo's default branch — the `ci /` prefix is
   the caller job id in `docs/caller-workflows/ci.yml`. That one job fails
   if any of `changes`/`matrix`/`test`/`plugin_check_matrix`/`plugin-check`
-  failed, and passes through allow-failure (trunk, and plugin-check on the
-  `wporg:false` plugin) legs correctly. In the harness repo's own direct
+  failed, and passes through allow-failure (trunk, harness-own plugin-check runs,
+  and plugin-check on any `wporg:false` plugin) legs correctly. In the harness repo's own direct
   runs (not through a caller), the equivalent check is plain **`ci-result`**
   (no prefix, since there's no wrapping caller job).
 

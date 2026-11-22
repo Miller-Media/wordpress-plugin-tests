@@ -102,7 +102,7 @@ Query it with `bin/manifest.php` — `dirs`, `slugs`, `field <slug> <dotted.fiel
 | Wooflare | `wooflare` | `wooflare/` | `wooflare.php` | `WOOCF_PLUGIN_VERSION` | yes |
 | One-Off Emails for WooCommerce | `one-off-emails-for-woocommerce` | `one-off-emails-for-woocommerce/` | `one-off-emails-for-woocommerce.php` | `WOOE_PLUGIN_VERSION` | yes |
 | Miller Media Server File Import | `import-from-server` | `import-from-server/` | `miller-media-server-file-import.php` | `MMSFI_PLUGIN_VERSION` | yes (svn slug `miller-media-server-file-import`) |
-| Miller Media CSV Importer | `miller-media-csv-importer` | `miller-media-csv-importer/` | `miller-media-csv-importer.php` | `MMCSV_PLUGIN_VERSION` | **no** — `wporg: false`, `svn_slug: null`. Never deploy this one. |
+| Miller Media CSV Importer | `miller-media-csv-importer` | `miller-media-csv-importer/` | `miller-media-csv-importer.php` | `MMCSV_PLUGIN_VERSION` | yes |
 
 Note `edit-usernames` has **no** version constant — its version only lives in the file header and readme Stable tag.
 
@@ -240,8 +240,6 @@ git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-`miller-media-csv-importer` has `wporg: false` — it is **never** deployed to SVN, tag or not.
-
 ### 6. Deploy to SVN manually
 
 SVN working copies live in `svn-deploy/<svn-slug>/` (checked out from trunk). **Respect the plugin's `.distignore`** — never copy `.git`, `tests/`, `CLAUDE.md`, `README.md` (when a `readme.txt` exists), `composer.*`, `node_modules`, etc. into the SVN working copy.
@@ -273,7 +271,7 @@ SVN slugs (differ from directory/slug names for some plugins — see `plugins.js
 | `wooflare` | `wooflare` |
 | `one-off-emails-for-woocommerce` | `one-off-emails-for-woocommerce` |
 | `import-from-server` | `miller-media-server-file-import` |
-| `miller-media-csv-importer` | *(none — not on wp.org)* |
+| `miller-media-csv-importer` | `miller-media-csv-importer` |
 
 ### Quick Checklist
 
@@ -289,7 +287,7 @@ SVN slugs (differ from directory/slug names for some plugins — see `plugins.js
 
 ### Workflows (`.github/workflows/`)
 
-- **`ci.yml`** — reusable (`workflow_call`, inputs `plugin`, `harness_ref`; secret `HARNESS_DEPLOY_KEY` optional, only needed if the plugin repo being checked out is itself private) and directly triggered here on `pull_request`/`push` to `main`/weekly `schedule`. Jobs: `changes` (maps changed files to affected plugin slugs via `bin/manifest.php affected`; on `schedule` it's every manifest slug instead), `matrix` (`bin/manifest.php matrix` — PHP 8.1–8.6 × `wp=latest` per plugin, filtered to each plugin's own `requires_php` floor, plus one cheap extra leg at that floor when it's below 8.1 (only `one-off-emails-for-woocommerce`'s 7.4 today), plus any `wc`/`wc_optional_leg` legs; no blanket WP-floor leg — see `build_matrix()`), `test` (one native run per matrix row, PHPCS report-only as an artifact + step summary, `bin/check-versions.php`), `plugin_check_matrix` + `plugin-check` (one `wordpress/plugin-check-action@v1` run per affected plugin against its own checkout; `ignore-warnings: true` so only plugin-check *errors* count; job-level `continue-on-error` for the one `wporg:false` plugin, `miller-media-csv-importer`, since it's never deployed to SVN), and **`ci-result`** — the single required check; it fails if `changes`/`matrix`/`plugin_check_matrix` didn't succeed or any `test`/`plugin-check` leg genuinely failed. `matrix`/`test`/`plugin_check_matrix`/`plugin-check` (and so `ci-result`'s normal work) are skipped entirely on the `schedule` trigger — that trigger exists only to drive the nightly job below.
+- **`ci.yml`** — reusable (`workflow_call`, inputs `plugin`, `harness_ref`; secret `HARNESS_DEPLOY_KEY` optional, only needed if the plugin repo being checked out is itself private) and directly triggered here on `pull_request`/`push` to `main`/weekly `schedule`. Jobs: `changes` (maps changed files to affected plugin slugs via `bin/manifest.php affected`; on `schedule` it's every manifest slug instead), `matrix` (`bin/manifest.php matrix` — PHP 8.1–8.6 × `wp=latest` per plugin, filtered to each plugin's own `requires_php` floor, plus one cheap extra leg at that floor when it's below 8.1 (only `one-off-emails-for-woocommerce`'s 7.4 today), plus any `wc`/`wc_optional_leg` legs; no blanket WP-floor leg — see `build_matrix()`), `test` (one native run per matrix row, PHPCS report-only as an artifact + step summary, `bin/check-versions.php`), `plugin_check_matrix` + `plugin-check` (one `wordpress/plugin-check-action@v1` run per affected plugin against its own checkout; `ignore-warnings: true` so only plugin-check *errors* count; job-level `continue-on-error` for the harness's own direct runs and any `wporg:false` plugin), and **`ci-result`** — the single required check; it fails if `changes`/`matrix`/`plugin_check_matrix` didn't succeed or any `test`/`plugin-check` leg genuinely failed. `matrix`/`test`/`plugin_check_matrix`/`plugin-check` (and so `ci-result`'s normal work) are skipped entirely on the `schedule` trigger — that trigger exists only to drive the nightly job below.
 - **Nightly WP compatibility (non-blocking)** — `nightly_matrix` + `nightly` jobs in `ci.yml`. Deliberately **not** in `ci-result`'s `needs:` and the test step is `continue-on-error: true`, so a nightly failure never blocks a PR. Runs every *affected* plugin on `pull_request` (and on a `workflow_call` from a plugin repo's own PR), and *every* manifest plugin on the weekly `schedule` (which only ever fires here, in the harness repo — a reusable `workflow_call` never gets its own cron trigger). Tests against the latest published WP beta/RC if one exists, else true trunk (`bin/manifest.php nightly-matrix` + `bin/setup-native.sh <slug> nightly`); includes the `wc_optional_leg` leg the same way the blocking matrix does, so e.g. `send-emails-with-mandrill` gets WooCommerce-active nightly coverage too. The job's display name is literally `nightly (non-blocking) (...)` — never add it (or `nightly_matrix`) to required checks.
 - **`.github/dependabot.yml`** — weekly, grouped GitHub Actions updates.
 
@@ -302,7 +300,7 @@ The check name differs by repo, because a plugin repo's caller workflow wraps th
 - **In a plugin repo**: require **`ci / ci-result`** (exact name) — `ci` is the caller job id in `docs/caller-workflows/ci.yml`, `ci-result` is the reusable workflow's own aggregate job name shown as a GitHub Actions "job" sub-check of that caller job.
 - **In this (harness) repo's own direct runs**: require plain **`ci-result`** — there's no wrapping caller job here.
 
-Either way it's the single gate: it fails if `changes`/`matrix`/`plugin_check_matrix` didn't succeed, or any `test`/`plugin-check` leg genuinely failed (plugin-check's own job-level `continue-on-error` already keeps the `wporg:false` plugin's leg from counting as a failure). Do **not** require `nightly_matrix` or the `nightly (non-blocking) (...)` job(s) — they're informational by design and will never report as a single stable check name (one per matrix leg).
+Either way it's the single gate: it fails if `changes`/`matrix`/`plugin_check_matrix` didn't succeed, or any `test`/`plugin-check` leg genuinely failed (plugin-check's own job-level `continue-on-error` already keeps non-blocking legs — harness-own runs and any `wporg:false` plugin — from counting as a failure). Do **not** require `nightly_matrix` or the `nightly (non-blocking) (...)` job(s) — they're informational by design and will never report as a single stable check name (one per matrix leg).
 
 ### Pinned actions
 
