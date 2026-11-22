@@ -1,9 +1,6 @@
 <?php
 /**
  * Tests for Miller Media CSV Importer plugin activation.
- *
- * This plugin is not published to wp.org (see plugins.json: wporg=false,
- * svn_slug=null) but is still covered by the same manifest-driven harness.
  */
 class MMCSV_ActivationTest extends PluginTestCase {
 
