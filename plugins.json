@@ -4,7 +4,7 @@
     "php_latest": "8.6",
     "wp_ci_floor": "6.4",
     "wc_latest_tested": "11.2",
-    "wp_latest_tested": "7.1"
+    "wp_latest_tested": "7.2"
   },
   "plugins": [
     {
